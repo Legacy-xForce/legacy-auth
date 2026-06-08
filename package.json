@@ -1,0 +1,22 @@
+{
+  "name": "legacy-auth-service",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run src/index.ts",
+    "start": "bun run src/index.ts",
+    "user:add": "bun run src/add-user.ts"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/jsonwebtoken": "^9.0.10",
+    "bun-types": "^1.2.16"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "jsonwebtoken": "^9.0.0",
+    "postgres": "^3.4.9",
+    "swagger-ui-dist": "^5.32.6"
+  }
+}
