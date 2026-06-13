@@ -1,6 +1,7 @@
 import jwt from "jsonwebtoken";
 import { config } from "./config.ts";
 import { createHash, randomUUID } from "crypto";
+import { getPrivateKey, getPublicKey, getKid } from "./keys.ts";
 
 export type AccessTokenPayload = {
   sub: string;
@@ -22,10 +23,11 @@ export function signAccessToken(payload: { sub: string; username: string }) {
       username: payload.username,
       type: "access",
     },
-    config.jwtSecret,
+    getPrivateKey(),
     {
-      algorithm: "HS256",
+      algorithm: "ES256",
       expiresIn: config.accessTokenTtlSeconds,
+      keyid: getKid(),
     }
   );
 }
@@ -51,7 +53,7 @@ export function signRefreshToken(payload: { sub: string; username: string }) {
 }
 
 export function verifyAccessToken(token: string): AccessTokenPayload {
-  return jwt.verify(token, config.jwtSecret) as AccessTokenPayload;
+  return jwt.verify(token, getPublicKey()) as AccessTokenPayload;
 }
 
 export function verifyRefreshToken(token: string): RefreshTokenPayload {

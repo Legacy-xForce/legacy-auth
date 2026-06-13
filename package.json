@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "bun run src/index.ts",
     "start": "bun run src/index.ts",
-    "user:add": "bun run src/add-user.ts"
+    "user:add": "bun run src/scripts/add-user.ts"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",

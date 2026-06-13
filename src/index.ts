@@ -3,6 +3,7 @@ import { config } from "./config.ts";
 import { initDatabase, findUserByUsername, saveRefreshToken, findRefreshTokenByJti, verifyRefreshTokenHash, revokeRefreshToken } from "./db.ts";
 import { getCachedUser, cacheUser, invalidateCachedUser } from "./cache.ts";
 import { signAccessToken, signRefreshToken, verifyRefreshToken, getRefreshTokenExpiresAt } from "./jwt.ts";
+import { getJwks } from "./keys.ts";
 import { createOpenApiDocument } from "./openapi.ts";
 import { createSwaggerAssetResponse, createSwaggerUiResponse, jsonHeaders } from "./swagger.ts";
 import bcrypt from "bcryptjs";
@@ -37,6 +38,9 @@ serve({
       }
       if (request.method === "POST" && url.pathname === "/auth/logout") {
         return await handleLogout(request);
+      }
+      if (request.method === "GET" && url.pathname === "/.well-known/jwks.json") {
+        return new Response(JSON.stringify(getJwks()), { status: 200, headers: jsonHeaders });
       }
       return new Response(JSON.stringify({ error: "Not found" }), { status: 404, headers: jsonHeaders });
     } catch (error) {

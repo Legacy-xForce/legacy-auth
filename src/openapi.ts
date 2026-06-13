@@ -102,6 +102,23 @@ export function createOpenApiDocument(): OpenApiDocument {
           },
         },
       },
+      "/.well-known/jwks.json": {
+        get: {
+          tags: ["Keys"],
+          summary: "JSON Web Key Set",
+          description: "Returns the public keys used to verify access token signatures (ES256). Consumers can use this endpoint to validate JWTs without sharing any secret.",
+          responses: {
+            "200": {
+              description: "JWKS document",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/JwksResponse" },
+                },
+              },
+            },
+          },
+        },
+      },
       "/openapi.json": {
         get: {
           tags: ["Docs"],
@@ -146,6 +163,28 @@ export function createOpenApiDocument(): OpenApiDocument {
           required: ["success"],
           properties: {
             success: { type: "boolean", example: true },
+          },
+        },
+        JwksResponse: {
+          type: "object",
+          required: ["keys"],
+          properties: {
+            keys: {
+              type: "array",
+              items: {
+                type: "object",
+                required: ["kty", "crv", "x", "y", "use", "alg", "kid"],
+                properties: {
+                  kty: { type: "string", example: "EC" },
+                  crv: { type: "string", example: "P-256" },
+                  x: { type: "string", description: "Base64url-encoded x coordinate" },
+                  y: { type: "string", description: "Base64url-encoded y coordinate" },
+                  use: { type: "string", example: "sig" },
+                  alg: { type: "string", example: "ES256" },
+                  kid: { type: "string", description: "Key ID (RFC 7638 thumbprint)" },
+                },
+              },
+            },
           },
         },
       },
