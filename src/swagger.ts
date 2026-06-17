@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { withCorsHeaders } from "./cors.ts";
 
 const swaggerAssetDir = join(process.cwd(), "node_modules", "swagger-ui-dist");
 
@@ -59,7 +60,7 @@ export function createSwaggerUiResponse() {
   </body>
 </html>`, {
     status: 200,
-    headers: htmlHeaders,
+    headers: withCorsHeaders(htmlHeaders),
   });
 }
 
@@ -71,8 +72,8 @@ export function createSwaggerAssetResponse(assetName: string) {
 
   return new Response(Bun.file(join(swaggerAssetDir, assetName)), {
     status: 200,
-    headers: {
+    headers: withCorsHeaders({
       "Content-Type": contentType,
-    },
+    }),
   });
 }
