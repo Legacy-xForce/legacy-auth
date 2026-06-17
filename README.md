@@ -7,6 +7,7 @@ A lightweight Bun-based authentication microservice for the Legacy ecosystem.
 - `POST /auth/login` to authenticate users
 - `POST /auth/refresh` to refresh access tokens
 - `POST /auth/logout` to revoke refresh tokens
+- `POST /auth/change-password` to change the authenticated user's password
 - Swagger UI at `GET /docs`
 - OpenAPI spec at `GET /openapi.json`
 - JWT access tokens (ES256) + refresh tokens (HS256)
@@ -71,6 +72,8 @@ Disabling a user revokes all of their refresh tokens and clears the cached auth 
 
 Existing bcrypt password hashes remain valid during login because Bun automatically detects the stored hash format. When a bcrypt user logs in successfully, the service upgrades the stored hash to Argon2.
 
+Changing a password requires the current password and a valid access token. After a successful password change, all of the user's refresh tokens are revoked so any active sessions must log in again.
+
 ## API
 
 ### Login
@@ -102,6 +105,28 @@ Returns `403 Account disabled` if the refresh token belongs to an inactive user.
 Body:
 ```json
 { "refresh_token": "..." }
+```
+
+### Change Password
+
+`POST /auth/change-password`
+
+Headers:
+```http
+Authorization: Bearer <access_token>
+```
+
+Body:
+```json
+{ "current_password": "old-secret", "new_password": "new-secret" }
+```
+
+Returns `401 Invalid access token` if the bearer token is missing or invalid, `401 Current password is invalid` if the current password does not match, and `403 Account disabled` if the account is inactive.
+
+On success, the response is:
+
+```json
+{ "success": true }
 ```
 
 ### JWKS

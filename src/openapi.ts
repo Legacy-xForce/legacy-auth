@@ -11,6 +11,7 @@ type OpenApiDocument = {
   paths: Record<string, unknown>;
   components: {
     schemas: Record<string, unknown>;
+    securitySchemes: Record<string, unknown>;
   };
 };
 
@@ -47,6 +48,34 @@ export function createOpenApiDocument(): OpenApiDocument {
             },
             "400": { description: "Missing username or password" },
             "401": { description: "Invalid credentials" },
+            "403": { description: "Account disabled" },
+          },
+        },
+      },
+      "/auth/change-password": {
+        post: {
+          tags: ["Auth"],
+          summary: "Change the authenticated user's password",
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/ChangePasswordRequest" },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              description: "Password changed successfully",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/ChangePasswordResponse" },
+                },
+              },
+            },
+            "400": { description: "Missing current_password or new_password" },
+            "401": { description: "Invalid access token or current password" },
             "403": { description: "Account disabled" },
           },
         },
@@ -134,6 +163,13 @@ export function createOpenApiDocument(): OpenApiDocument {
       },
     },
     components: {
+      securitySchemes: {
+        bearerAuth: {
+          type: "http",
+          scheme: "bearer",
+          bearerFormat: "JWT",
+        },
+      },
       schemas: {
         LoginRequest: {
           type: "object",
@@ -148,6 +184,21 @@ export function createOpenApiDocument(): OpenApiDocument {
           required: ["refresh_token"],
           properties: {
             refresh_token: { type: "string", example: "eyJhbGciOi..." },
+          },
+        },
+        ChangePasswordRequest: {
+          type: "object",
+          required: ["current_password", "new_password"],
+          properties: {
+            current_password: { type: "string", example: "old-secret" },
+            new_password: { type: "string", example: "new-secret" },
+          },
+        },
+        ChangePasswordResponse: {
+          type: "object",
+          required: ["success"],
+          properties: {
+            success: { type: "boolean", example: true },
           },
         },
         TokenResponse: {

@@ -3,7 +3,7 @@ import { config } from "./config.ts";
 import { createCorsPreflightResponse, withCorsHeaders } from "./cors.ts";
 import { initDatabase, findUserByUsername, findUserActiveByUsername, findUserById, saveRefreshToken, findRefreshTokenByJti, verifyRefreshTokenHash, revokeRefreshToken, revokeAllRefreshTokensForUser, updateUserPasswordHash } from "./db.ts";
 import { getCachedUser, cacheUser, invalidateCachedUser } from "./cache.ts";
-import { signAccessToken, signRefreshToken, verifyRefreshToken, getRefreshTokenExpiresAt } from "./jwt.ts";
+import { signAccessToken, signRefreshToken, verifyAccessToken, verifyRefreshToken, getRefreshTokenExpiresAt } from "./jwt.ts";
 import { getJwks } from "./keys.ts";
 import { createOpenApiDocument } from "./openapi.ts";
 import { createSwaggerAssetResponse, createSwaggerUiResponse, jsonHeaders } from "./swagger.ts";
@@ -41,6 +41,9 @@ serve({
       }
       if (request.method === "POST" && url.pathname === "/auth/logout") {
         return await handleLogout(request);
+      }
+      if (request.method === "POST" && url.pathname === "/auth/change-password") {
+        return await handleChangePassword(request);
       }
       if (request.method === "GET" && url.pathname === "/.well-known/jwks.json") {
         return new Response(JSON.stringify(getJwks()), { status: 200, headers: withCorsHeaders(jsonHeaders) });
@@ -196,6 +199,57 @@ async function handleLogout(request: Request) {
 
   await revokeRefreshToken(payload.jti);
   invalidateCachedUser(payload.username);
+
+  return new Response(JSON.stringify({ success: true }), { status: 200, headers: withCorsHeaders(jsonHeaders) });
+}
+
+async function handleChangePassword(request: Request) {
+  const authorization = request.headers.get("authorization") ?? request.headers.get("Authorization") ?? "";
+  const token = authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length).trim() : "";
+  if (!token) {
+    return new Response(JSON.stringify({ error: "Authorization bearer token is required" }), { status: 401, headers: withCorsHeaders(jsonHeaders) });
+  }
+
+  let payload;
+  try {
+    payload = verifyAccessToken(token);
+  } catch (error) {
+    return new Response(JSON.stringify({ error: "Invalid access token" }), { status: 401, headers: withCorsHeaders(jsonHeaders) });
+  }
+
+  const body = await parseJson<{ current_password?: string; new_password?: string }>(request);
+  const currentPassword = String(body.current_password ?? "");
+  const newPassword = String(body.new_password ?? "");
+  if (!currentPassword || !newPassword) {
+    return new Response(JSON.stringify({ error: "current_password and new_password are required" }), { status: 400, headers: withCorsHeaders(jsonHeaders) });
+  }
+  if (currentPassword === newPassword) {
+    return new Response(JSON.stringify({ error: "new_password must be different from current_password" }), { status: 400, headers: withCorsHeaders(jsonHeaders) });
+  }
+
+  let user = await findUserById(payload.sub);
+  if (!user) {
+    return new Response(JSON.stringify({ error: "Invalid access token" }), { status: 401, headers: withCorsHeaders(jsonHeaders) });
+  }
+  if (!user.active) {
+    await revokeAllRefreshTokensForUser(user.id);
+    invalidateCachedUser(user.username);
+    return new Response(JSON.stringify({ error: "Account disabled" }), { status: 403, headers: withCorsHeaders(jsonHeaders) });
+  }
+
+  const validPassword = await Bun.password.verify(currentPassword, user.password_hash);
+  if (!validPassword) {
+    return new Response(JSON.stringify({ error: "Current password is invalid" }), { status: 401, headers: withCorsHeaders(jsonHeaders) });
+  }
+
+  const newPasswordHash = await Bun.password.hash(newPassword);
+  const updatedUser = await updateUserPasswordHash(user.id, newPasswordHash);
+  if (!updatedUser) {
+    return new Response(JSON.stringify({ error: "Failed to update password" }), { status: 500, headers: withCorsHeaders(jsonHeaders) });
+  }
+
+  await revokeAllRefreshTokensForUser(updatedUser.id);
+  invalidateCachedUser(updatedUser.username);
 
   return new Response(JSON.stringify({ success: true }), { status: 200, headers: withCorsHeaders(jsonHeaders) });
 }
