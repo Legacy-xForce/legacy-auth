@@ -1,4 +1,4 @@
-import { findUserByUsername, revokeAllRefreshTokensForUser, updateUserActive } from "../db.ts";
+import { initDatabase, findUserByUsername, revokeAllRefreshTokensForUser, updateUserActive } from "../db.ts";
 import { invalidateCachedUser } from "../cache.ts";
 
 function usage() {
@@ -13,6 +13,8 @@ function parseActive(value: string) {
 }
 
 async function main() {
+  await initDatabase();
+
   const [rawUsername, rawActive] = process.argv.slice(2).filter((arg) => arg !== "--");
   const username = String(rawUsername ?? "").trim();
   const active = parseActive(String(rawActive ?? ""));

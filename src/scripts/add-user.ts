@@ -1,4 +1,4 @@
-import { createUserWithActive } from "../db.ts";
+import { initDatabase, createUserWithActive } from "../db.ts";
 
 function usage() {
   console.error("Usage: bun run user:add <username> <password> [--inactive]");
@@ -17,6 +17,8 @@ function getArgs() {
 }
 
 async function main() {
+  await initDatabase();
+
   const { username, password, active } = getArgs();
   if (!username || !password) {
     usage();

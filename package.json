@@ -7,7 +7,8 @@
     "dev": "bun run src/index.ts",
     "start": "bun run src/index.ts",
     "user:add": "bun run src/scripts/add-user.ts",
-    "user:set-active": "bun run src/scripts/set-user-active.ts"
+    "user:set-active": "bun run src/scripts/set-user-active.ts",
+    "user:sync": "bun run src/scripts/sync-users.ts"
   },
   "devDependencies": {
     "@types/jsonwebtoken": "^9.0.10",
