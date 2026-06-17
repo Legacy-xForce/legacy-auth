@@ -54,6 +54,21 @@ bun run user:add alice secret
 
 The script uses `DATABASE_URL`, hashes the password with Bun's password API, and inserts the user into the `users` table.
 
+Users are created with `active = true` by default. Pass `--inactive` if you want to create the account disabled from the start:
+
+```bash
+bun run user:add alice secret --inactive
+```
+
+To enable or disable an existing user:
+
+```bash
+bun run user:set-active alice false
+bun run user:set-active alice true
+```
+
+Disabling a user revokes all of their refresh tokens and clears the cached auth entry. Disabled users receive `403 Account disabled` from login and refresh attempts.
+
 Existing bcrypt password hashes remain valid during login because Bun automatically detects the stored hash format. When a bcrypt user logs in successfully, the service upgrades the stored hash to Argon2.
 
 ## API
@@ -67,6 +82,8 @@ Body:
 { "username": "alice", "password": "secret" }
 ```
 
+Returns `403 Account disabled` if the user exists but is not active.
+
 ### Refresh
 
 `POST /auth/refresh`
@@ -75,6 +92,8 @@ Body:
 ```json
 { "refresh_token": "..." }
 ```
+
+Returns `403 Account disabled` if the refresh token belongs to an inactive user.
 
 ### Logout
 

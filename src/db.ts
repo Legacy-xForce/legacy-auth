@@ -13,9 +13,15 @@ export async function initDatabase() {
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       username text NOT NULL UNIQUE,
       password_hash text NOT NULL,
+      active boolean NOT NULL DEFAULT true,
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now()
     );
+  `;
+
+  await sql`
+    ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS active boolean NOT NULL DEFAULT true;
   `;
 
   await sql`
@@ -38,6 +44,13 @@ export async function findUserByUsername(username: string): Promise<UserRecord |
   return result[0] ?? null;
 }
 
+export async function findUserActiveByUsername(username: string): Promise<Pick<UserRecord, "id" | "active"> | null> {
+  const result = await sql<Pick<UserRecord, "id" | "active">[]>`
+    SELECT id, active FROM users WHERE username = ${username} LIMIT 1;
+  `;
+  return result[0] ?? null;
+}
+
 export async function findUserById(id: string): Promise<UserRecord | null> {
   const result = await sql<UserRecord[]>`
     SELECT * FROM users WHERE id = ${id} LIMIT 1;
@@ -46,10 +59,14 @@ export async function findUserById(id: string): Promise<UserRecord | null> {
 }
 
 export async function createUser(username: string, password: string): Promise<UserRecord> {
+  return createUserWithActive(username, password, true);
+}
+
+export async function createUserWithActive(username: string, password: string, active: boolean): Promise<UserRecord> {
   const passwordHash = await Bun.password.hash(password);
   const result = await sql<UserRecord[]>`
-    INSERT INTO users (username, password_hash)
-    VALUES (${username}, ${passwordHash})
+    INSERT INTO users (username, password_hash, active)
+    VALUES (${username}, ${passwordHash}, ${active})
     RETURNING *;
   `;
   return result[0];
@@ -59,6 +76,17 @@ export async function updateUserPasswordHash(userId: string, passwordHash: strin
   const result = await sql<UserRecord[]>`
     UPDATE users
     SET password_hash = ${passwordHash},
+        updated_at = now()
+    WHERE id = ${userId}
+    RETURNING *;
+  `;
+  return result[0] ?? null;
+}
+
+export async function updateUserActive(userId: string, active: boolean): Promise<UserRecord | null> {
+  const result = await sql<UserRecord[]>`
+    UPDATE users
+    SET active = ${active},
         updated_at = now()
     WHERE id = ${userId}
     RETURNING *;

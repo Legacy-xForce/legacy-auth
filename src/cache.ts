@@ -2,7 +2,7 @@ import { UserRecord } from "./types.ts";
 import { config } from "./config.ts";
 
 type CacheEntry = {
-  user: Pick<UserRecord, "id" | "username" | "password_hash">;
+  user: Pick<UserRecord, "id" | "username" | "password_hash" | "active">;
   expiresAt: number;
 };
 
@@ -18,7 +18,7 @@ export function getCachedUser(username: string) {
   return entry.user;
 }
 
-export function cacheUser(user: Pick<UserRecord, "id" | "username" | "password_hash">) {
+export function cacheUser(user: Pick<UserRecord, "id" | "username" | "password_hash" | "active">) {
   cache.set(user.username, {
     user,
     expiresAt: Date.now() + config.cacheTtlMs,

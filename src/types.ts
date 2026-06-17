@@ -2,6 +2,7 @@ export type UserRecord = {
   id: string;
   username: string;
   password_hash: string;
+  active: boolean;
   created_at: string;
   updated_at: string;
 };

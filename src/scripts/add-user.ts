@@ -1,20 +1,23 @@
-import { createUser } from "../db.ts";
+import { createUserWithActive } from "../db.ts";
 
 function usage() {
-  console.error("Usage: bun run user:add <username> <password>");
+  console.error("Usage: bun run user:add <username> <password> [--inactive]");
 }
 
 function getArgs() {
   const args = process.argv.slice(2).filter((arg) => arg !== "--");
-  const [username, password] = args;
+  const positionalArgs = args.filter((arg) => !arg.startsWith("--"));
+  const flags = new Set(args.filter((arg) => arg.startsWith("--")));
+  const [username, password] = positionalArgs;
   return {
     username: String(username ?? "").trim(),
     password: String(password ?? ""),
+    active: !flags.has("--inactive"),
   };
 }
 
 async function main() {
-  const { username, password } = getArgs();
+  const { username, password, active } = getArgs();
   if (!username || !password) {
     usage();
     process.exitCode = 1;
@@ -22,8 +25,8 @@ async function main() {
   }
 
   try {
-    const user = await createUser(username, password);
-    console.log(`Created user ${user.username} (${user.id})`);
+    const user = await createUserWithActive(username, password, active);
+    console.log(`Created user ${user.username} (${user.id}) [active=${user.active}]`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (message.toLowerCase().includes("unique")) {

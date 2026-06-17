@@ -1,6 +1,6 @@
 import { serve } from "bun";
 import { config } from "./config.ts";
-import { initDatabase, findUserByUsername, saveRefreshToken, findRefreshTokenByJti, verifyRefreshTokenHash, revokeRefreshToken, updateUserPasswordHash } from "./db.ts";
+import { initDatabase, findUserByUsername, findUserActiveByUsername, findUserById, saveRefreshToken, findRefreshTokenByJti, verifyRefreshTokenHash, revokeRefreshToken, revokeAllRefreshTokensForUser, updateUserPasswordHash } from "./db.ts";
 import { getCachedUser, cacheUser, invalidateCachedUser } from "./cache.ts";
 import { signAccessToken, signRefreshToken, verifyRefreshToken, getRefreshTokenExpiresAt } from "./jwt.ts";
 import { getJwks } from "./keys.ts";
@@ -63,15 +63,33 @@ async function handleLogin(request: Request) {
   }
 
   let user = getCachedUser(username);
-  if (!user) {
+  if (user) {
+    const status = await findUserActiveByUsername(username);
+    if (!status) {
+      invalidateCachedUser(username);
+      return new Response(JSON.stringify({ error: "Invalid credentials" }), { status: 401, headers: jsonHeaders });
+    }
+    if (!status.active) {
+      invalidateCachedUser(username);
+      return new Response(JSON.stringify({ error: "Account disabled" }), { status: 403, headers: jsonHeaders });
+    }
+    user = {
+      ...user,
+      active: status.active,
+    };
+  } else {
     const record = await findUserByUsername(username);
     if (!record) {
       return new Response(JSON.stringify({ error: "Invalid credentials" }), { status: 401, headers: jsonHeaders });
+    }
+    if (!record.active) {
+      return new Response(JSON.stringify({ error: "Account disabled" }), { status: 403, headers: jsonHeaders });
     }
     user = {
       id: record.id,
       username: record.username,
       password_hash: record.password_hash,
+      active: record.active,
     };
     cacheUser(user);
   }
@@ -89,6 +107,7 @@ async function handleLogin(request: Request) {
         id: updatedUser.id,
         username: updatedUser.username,
         password_hash: updatedUser.password_hash,
+        active: updatedUser.active,
       };
       cacheUser(user);
     }
@@ -130,6 +149,18 @@ async function handleRefresh(request: Request) {
   const validHash = await verifyRefreshTokenHash(rawToken, stored.token_hash);
   if (!validHash) {
     return new Response(JSON.stringify({ error: "Invalid refresh token" }), { status: 401, headers: jsonHeaders });
+  }
+
+  const user = await findUserById(payload.sub);
+  if (!user) {
+    await revokeRefreshToken(payload.jti);
+    invalidateCachedUser(payload.username);
+    return new Response(JSON.stringify({ error: "Invalid or revoked refresh token" }), { status: 401, headers: jsonHeaders });
+  }
+  if (!user.active) {
+    await revokeAllRefreshTokensForUser(user.id);
+    invalidateCachedUser(payload.username);
+    return new Response(JSON.stringify({ error: "Account disabled" }), { status: 403, headers: jsonHeaders });
   }
 
   const accessToken = signAccessToken({ sub: payload.sub, username: payload.username });
