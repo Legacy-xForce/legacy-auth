@@ -7,5 +7,4 @@ export const config = {
   accessTokenTtlSeconds: Number(process.env.ACCESS_TOKEN_TTL_SECONDS ?? 900),
   refreshTokenTtlSeconds: Number(process.env.REFRESH_TOKEN_TTL_SECONDS ?? 2592000),
   cacheTtlMs: Number(process.env.CACHE_TTL_MS ?? 300_000),
-  bcryptSaltRounds: Number(process.env.BCRYPT_SALT_ROUNDS ?? 12),
 };

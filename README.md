@@ -13,7 +13,8 @@ A lightweight Bun-based authentication microservice for the Legacy ecosystem.
 - JWKS endpoint at `GET /.well-known/jwks.json` for public key discovery
 - in-memory username/password cache
 - PostgreSQL backed refresh token revocation
-- bcrypt password hashing with 12 rounds
+- Bun password hashing with Argon2 for new passwords
+- Bun password verification for both Argon2 and legacy bcrypt hashes
 
 ## Environment
 
@@ -30,7 +31,6 @@ Optional environment variables:
 - `ACCESS_TOKEN_TTL_SECONDS` (default: `900`)
 - `REFRESH_TOKEN_TTL_SECONDS` (default: `2592000`)
 - `CACHE_TTL_MS` (default: `300000`)
-- `BCRYPT_SALT_ROUNDS` (default: `12`)
 
 ## Run
 
@@ -52,7 +52,9 @@ Add users directly to the database with the admin script:
 bun run user:add alice secret
 ```
 
-The script uses `DATABASE_URL`, hashes the password with bcrypt, and inserts the user into the `users` table.
+The script uses `DATABASE_URL`, hashes the password with Bun's password API, and inserts the user into the `users` table.
+
+Existing bcrypt password hashes remain valid during login because Bun automatically detects the stored hash format. When a bcrypt user logs in successfully, the service upgrades the stored hash to Argon2.
 
 ## API
 

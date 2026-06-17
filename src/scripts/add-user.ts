@@ -1,6 +1,4 @@
-import Postgres from "postgres";
-import bcrypt from "bcryptjs";
-import { config } from "../config.ts";
+import { createUser } from "../db.ts";
 
 function usage() {
   console.error("Usage: bun run user:add <username> <password>");
@@ -23,17 +21,8 @@ async function main() {
     return;
   }
 
-  const sql = Postgres(config.dbUrl, { max: 1 });
-
   try {
-    const passwordHash = await bcrypt.hash(password, config.bcryptSaltRounds);
-    const result = await sql<{ id: string; username: string }[]>`
-      INSERT INTO users (username, password_hash)
-      VALUES (${username}, ${passwordHash})
-      RETURNING id, username;
-    `;
-
-    const user = result[0];
+    const user = await createUser(username, password);
     console.log(`Created user ${user.username} (${user.id})`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -43,8 +32,6 @@ async function main() {
       console.error(`Failed to create user: ${message}`);
     }
     process.exitCode = 1;
-  } finally {
-    await sql.end({ timeout: 5 });
   }
 }
 

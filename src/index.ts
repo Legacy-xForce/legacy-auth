@@ -1,12 +1,11 @@
 import { serve } from "bun";
 import { config } from "./config.ts";
-import { initDatabase, findUserByUsername, saveRefreshToken, findRefreshTokenByJti, verifyRefreshTokenHash, revokeRefreshToken } from "./db.ts";
+import { initDatabase, findUserByUsername, saveRefreshToken, findRefreshTokenByJti, verifyRefreshTokenHash, revokeRefreshToken, updateUserPasswordHash } from "./db.ts";
 import { getCachedUser, cacheUser, invalidateCachedUser } from "./cache.ts";
 import { signAccessToken, signRefreshToken, verifyRefreshToken, getRefreshTokenExpiresAt } from "./jwt.ts";
 import { getJwks } from "./keys.ts";
 import { createOpenApiDocument } from "./openapi.ts";
 import { createSwaggerAssetResponse, createSwaggerUiResponse, jsonHeaders } from "./swagger.ts";
-import bcrypt from "bcryptjs";
 
 const openApiDocument = createOpenApiDocument();
 
@@ -77,9 +76,22 @@ async function handleLogin(request: Request) {
     cacheUser(user);
   }
 
-  const validPassword = await bcrypt.compare(password, user.password_hash);
+  const validPassword = await Bun.password.verify(password, user.password_hash);
   if (!validPassword) {
     return new Response(JSON.stringify({ error: "Invalid credentials" }), { status: 401, headers: jsonHeaders });
+  }
+
+  if (user.password_hash.startsWith("$2")) {
+    const upgradedPasswordHash = await Bun.password.hash(password);
+    const updatedUser = await updateUserPasswordHash(user.id, upgradedPasswordHash);
+    if (updatedUser) {
+      user = {
+        id: updatedUser.id,
+        username: updatedUser.username,
+        password_hash: updatedUser.password_hash,
+      };
+      cacheUser(user);
+    }
   }
 
   const accessToken = signAccessToken({ sub: user.id, username: user.username });

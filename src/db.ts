@@ -45,13 +45,25 @@ export async function findUserById(id: string): Promise<UserRecord | null> {
   return result[0] ?? null;
 }
 
-export async function createUser(username: string, passwordHash: string): Promise<UserRecord> {
+export async function createUser(username: string, password: string): Promise<UserRecord> {
+  const passwordHash = await Bun.password.hash(password);
   const result = await sql<UserRecord[]>`
     INSERT INTO users (username, password_hash)
     VALUES (${username}, ${passwordHash})
     RETURNING *;
   `;
   return result[0];
+}
+
+export async function updateUserPasswordHash(userId: string, passwordHash: string): Promise<UserRecord | null> {
+  const result = await sql<UserRecord[]>`
+    UPDATE users
+    SET password_hash = ${passwordHash},
+        updated_at = now()
+    WHERE id = ${userId}
+    RETURNING *;
+  `;
+  return result[0] ?? null;
 }
 
 export async function saveRefreshToken(userId: string, jti: string, token: string, expiresAt: Date): Promise<RefreshTokenRecord> {
