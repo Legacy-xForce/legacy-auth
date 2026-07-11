@@ -235,6 +235,15 @@ export async function deleteUserByUsername(username: string): Promise<void> {
   `;
 }
 
+export async function deleteUserById(id: string): Promise<boolean> {
+  const result = await sql`
+    DELETE FROM users
+    WHERE id = ${id}
+    RETURNING id;
+  `;
+  return result.length > 0;
+}
+
 export async function saveRefreshToken(userId: string, jti: string, token: string, expiresAt: Date): Promise<RefreshTokenRecord> {
   const tokenHash = hashToken(token);
   const result = await sql<RefreshTokenRecord[]>`

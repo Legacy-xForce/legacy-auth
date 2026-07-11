@@ -2,14 +2,16 @@
 import { onMounted, ref } from "vue";
 import { RouterLink, useRouter } from "vue-router";
 import { api } from "../../api/client";
-import type { User } from "../../stores/auth";
+import { useAuthStore, type User } from "../../stores/auth";
 import Icon from "../../components/Icon.vue";
 import ToggleSwitch from "../../components/ToggleSwitch.vue";
 import UserAvatar from "../../components/UserAvatar.vue";
 import PasswordInput from "../../components/PasswordInput.vue";
+import ConfirmDialog from "../../components/ConfirmDialog.vue";
 
 const props = defineProps<{ id: string }>();
 const router = useRouter();
+const authStore = useAuthStore();
 
 const user = ref<User | null>(null);
 const username = ref("");
@@ -20,6 +22,8 @@ const trackerScope = ref(false);
 const password = ref("");
 
 const saving = ref(false);
+const deleting = ref(false);
+const confirmingDelete = ref(false);
 const error = ref("");
 const avatarInput = ref<HTMLInputElement | null>(null);
 const avatarVersion = ref(0);
@@ -90,6 +94,20 @@ async function save() {
 function discard() {
   router.push({ name: "users" });
 }
+
+async function confirmDelete() {
+  error.value = "";
+  deleting.value = true;
+  try {
+    await api.delete(`/admin/users/${props.id}`);
+    router.push({ name: "users" });
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : "Failed to delete user";
+    confirmingDelete.value = false;
+  } finally {
+    deleting.value = false;
+  }
+}
 </script>
 
 <template>
@@ -105,7 +123,16 @@ function discard() {
         <h1 class="m-0 mb-1 text-2xl font-bold">Edit Identity</h1>
         <p class="m-0 text-sm text-text-muted">Modify access scopes, credentials, and profile configuration.</p>
       </div>
-      <div class="flex w-full shrink-0 gap-2.5 sm:w-auto">
+      <div class="flex w-full shrink-0 flex-wrap gap-2.5 sm:w-auto sm:flex-nowrap">
+        <button
+          v-if="user.id !== authStore.user?.id"
+          class="btn btn-danger flex-1 sm:flex-none"
+          :disabled="deleting"
+          @click="confirmingDelete = true"
+        >
+          <Icon name="trash" :size="14" />
+          {{ deleting ? "Deleting…" : "Delete User" }}
+        </button>
         <button class="btn btn-ghost flex-1 sm:flex-none" @click="discard">Discard</button>
         <button class="btn btn-primary flex-1 sm:flex-none" :disabled="saving" @click="save">
           {{ saving ? "Saving…" : "Save Changes" }}
@@ -205,5 +232,16 @@ function discard() {
         </div>
       </div>
     </div>
+
+    <ConfirmDialog
+      :open="confirmingDelete"
+      title="Delete this user?"
+      :message="`Permanently delete “${user.username}”. This action cannot be undone.`"
+      confirm-label="Delete User"
+      danger
+      :busy="deleting"
+      @confirm="confirmDelete"
+      @cancel="confirmingDelete = false"
+    />
   </div>
 </template>

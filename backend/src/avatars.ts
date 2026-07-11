@@ -41,6 +41,10 @@ export async function saveAvatar(userId: string, data: Uint8Array): Promise<{ ex
   return { extension: target.extension, contentType: target.contentType };
 }
 
+export async function deleteAvatar(userId: string): Promise<void> {
+  await removeAvatarFiles(userId, ALL_EXTENSIONS);
+}
+
 export async function findAvatar(userId: string): Promise<{ path: string; contentType: string } | null> {
   for (const extension of ALL_EXTENSIONS) {
     const path = avatarPath(userId, extension);

@@ -84,8 +84,6 @@ async function logout() {
           <input class="input" placeholder="Search resources…" />
         </div>
         <div class="flex shrink-0 items-center gap-1 sm:gap-2">
-          <button class="icon-btn hidden rounded-full! sm:inline-flex"><Icon name="bell" :size="18" /></button>
-          <button class="icon-btn hidden rounded-full! sm:inline-flex"><Icon name="help" :size="18" /></button>
           <div class="relative">
             <button class="rounded-full border-none bg-none p-0" @click="menuOpen = !menuOpen">
               <UserAvatar v-if="auth.user" :user-id="auth.user.id" :size="32" />

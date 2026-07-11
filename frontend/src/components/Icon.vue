@@ -28,6 +28,8 @@ const icons: Record<string, string> = {
   x: "lucide:x",
   eye: "lucide:eye",
   eyeOff: "lucide:eye-off",
+  trash: "lucide:trash-2",
+  alertTriangle: "lucide:triangle-alert",
 };
 </script>
 

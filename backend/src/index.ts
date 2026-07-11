@@ -1,14 +1,14 @@
 import { serve } from "bun";
 import { config } from "./config.ts";
 import { createCorsPreflightResponse, withCorsHeaders } from "./cors.ts";
-import { initDatabase, findUserByUsername, findUserActiveByUsername, findUserById, saveRefreshToken, findRefreshTokenByJti, verifyRefreshTokenHash, revokeRefreshToken, revokeAllRefreshTokensForUser, updateUserPasswordHash, createUserWithActive, listUsersPaginated, updateUserProfile, updateUserScopes } from "./db.ts";
+import { initDatabase, findUserByUsername, findUserActiveByUsername, findUserById, saveRefreshToken, findRefreshTokenByJti, verifyRefreshTokenHash, revokeRefreshToken, revokeAllRefreshTokensForUser, updateUserPasswordHash, createUserWithActive, listUsersPaginated, updateUserProfile, updateUserScopes, deleteUserById } from "./db.ts";
 import { UserRecord, UserRole, UserScopes } from "./types.ts";
 import { getCachedUser, cacheUser, invalidateCachedUser } from "./cache.ts";
 import { signAccessToken, signRefreshToken, verifyAccessToken, verifyRefreshToken, getRefreshTokenExpiresAt } from "./jwt.ts";
 import { getJwks } from "./keys.ts";
 import { createOpenApiDocument } from "./openapi.ts";
 import { createSwaggerAssetResponse, createSwaggerUiResponse, jsonHeaders } from "./swagger.ts";
-import { saveAvatar, findAvatar, UnsupportedImageError, UUID_PATTERN } from "./avatars.ts";
+import { saveAvatar, findAvatar, deleteAvatar, UnsupportedImageError, UUID_PATTERN } from "./avatars.ts";
 import { join, normalize } from "path";
 
 const openApiDocument = createOpenApiDocument();
@@ -76,6 +76,9 @@ serve({
         }
         if (request.method === "PATCH") {
           return await handleUpdateUser(request, userMatch[1]);
+        }
+        if (request.method === "DELETE") {
+          return await handleDeleteUser(request, userMatch[1]);
         }
       }
       const userAvatarMatch = url.pathname.match(/^\/admin\/users\/([0-9a-f-]{36})\/avatar$/i);
@@ -590,6 +593,26 @@ async function handleUpdateUser(request: Request, id: string) {
   invalidateCachedUser(user.username);
 
   return new Response(JSON.stringify(toPublicUser(user)), { status: 200, headers: withCorsHeaders(jsonHeaders) });
+}
+
+async function handleDeleteUser(request: Request, id: string) {
+  const auth = await authenticateAdmin(request);
+  if (auth instanceof Response) return auth;
+
+  if (auth.id === id) {
+    return new Response(JSON.stringify({ error: "You cannot delete your own account" }), { status: 400, headers: withCorsHeaders(jsonHeaders) });
+  }
+
+  const target = await findUserById(id);
+  if (!target) {
+    return new Response(JSON.stringify({ error: "Not found" }), { status: 404, headers: withCorsHeaders(jsonHeaders) });
+  }
+
+  await deleteUserById(id);
+  await deleteAvatar(id);
+  invalidateCachedUser(target.username);
+
+  return new Response(null, { status: 204, headers: withCorsHeaders({}) });
 }
 
 async function handleUploadUserAvatar(request: Request, id: string) {

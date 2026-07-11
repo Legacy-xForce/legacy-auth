@@ -79,6 +79,14 @@ body {
     @apply border-border-strong bg-transparent text-text hover:not-disabled:bg-bg-hover;
   }
 
+  .btn-danger {
+    @apply border-danger/40 bg-transparent text-danger hover:not-disabled:bg-danger-soft;
+  }
+
+  .btn-danger-solid {
+    @apply bg-danger text-white hover:not-disabled:bg-danger/85;
+  }
+
   .field {
     @apply flex flex-col gap-1.5;
   }
