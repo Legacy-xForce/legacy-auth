@@ -7,4 +7,7 @@ export const config = {
   accessTokenTtlSeconds: Number(process.env.ACCESS_TOKEN_TTL_SECONDS ?? 900),
   refreshTokenTtlSeconds: Number(process.env.REFRESH_TOKEN_TTL_SECONDS ?? 2592000),
   cacheTtlMs: Number(process.env.CACHE_TTL_MS ?? 300_000),
+  avatarStorageDir: process.env.AVATAR_STORAGE_DIR ?? "./data/avatars",
+  avatarMaxUploadBytes: Number(process.env.AVATAR_MAX_UPLOAD_BYTES ?? 8 * 1024 * 1024),
+  frontendDistDir: process.env.FRONTEND_DIST_DIR ?? "../frontend/dist",
 };

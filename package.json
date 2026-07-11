@@ -1,22 +1,16 @@
 {
-  "name": "legacy-auth-service",
-  "version": "0.1.0",
+  "name": "legacy-auth",
   "private": true,
-  "type": "module",
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
   "scripts": {
-    "dev": "bun run src/index.ts",
-    "start": "bun run src/index.ts",
-    "user:add": "bun run src/scripts/add-user.ts",
-    "user:set-active": "bun run src/scripts/set-user-active.ts",
-    "user:sync": "bun run src/scripts/sync-users.ts"
-  },
-  "devDependencies": {
-    "@types/jsonwebtoken": "^9.0.10",
-    "bun-types": "^1.2.16"
-  },
-  "dependencies": {
-    "@types/node": "^25.9.2",
-    "jsonwebtoken": "^9.0.0",
-    "swagger-ui-dist": "^5.32.6"
+    "dev:backend": "bun run --cwd backend dev",
+    "dev:frontend": "bun run --cwd frontend dev",
+    "build:frontend": "bun run --cwd frontend build",
+    "start": "bun run --cwd backend start",
+    "user:add": "bun run --cwd backend user:add",
+    "user:set-active": "bun run --cwd backend user:set-active"
   }
 }

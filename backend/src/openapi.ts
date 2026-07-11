@@ -133,6 +133,67 @@ export function createOpenApiDocument(): OpenApiDocument {
           },
         },
       },
+      "/auth/profile-picture": {
+        post: {
+          tags: ["Profile"],
+          summary: "Upload the authenticated user's profile picture",
+          description: "Accepts JPEG, PNG, WebP, or GIF images. Non-GIF images are resized to 256x256 and re-encoded as compressed JPEG. GIFs are resized to 256x256 and kept as GIF so animation is preserved.",
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              "multipart/form-data": {
+                schema: {
+                  type: "object",
+                  required: ["file"],
+                  properties: {
+                    file: { type: "string", format: "binary" },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              description: "Profile picture stored successfully",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/UploadProfilePictureResponse" },
+                },
+              },
+            },
+            "400": { description: "Missing file, unsupported format, or corrupted image" },
+            "401": { description: "Invalid access token" },
+            "403": { description: "Account disabled" },
+            "413": { description: "File exceeds maximum upload size" },
+          },
+        },
+      },
+      "/auth/profile-picture/{userId}": {
+        get: {
+          tags: ["Profile"],
+          summary: "Fetch a user's profile picture",
+          parameters: [
+            {
+              name: "userId",
+              in: "path",
+              required: true,
+              schema: { type: "string", format: "uuid" },
+            },
+          ],
+          responses: {
+            "200": {
+              description: "Profile picture image bytes (image/jpeg or image/gif)",
+              content: {
+                "image/jpeg": { schema: { type: "string", format: "binary" } },
+                "image/gif": { schema: { type: "string", format: "binary" } },
+              },
+            },
+            "400": { description: "Invalid user id" },
+            "404": { description: "No profile picture stored for this user" },
+          },
+        },
+      },
       "/.well-known/jwks.json": {
         get: {
           tags: ["Keys"],
@@ -216,6 +277,14 @@ export function createOpenApiDocument(): OpenApiDocument {
           required: ["success"],
           properties: {
             success: { type: "boolean", example: true },
+          },
+        },
+        UploadProfilePictureResponse: {
+          type: "object",
+          required: ["success", "content_type"],
+          properties: {
+            success: { type: "boolean", example: true },
+            content_type: { type: "string", example: "image/jpeg" },
           },
         },
         JwksResponse: {

@@ -2,10 +2,13 @@ import jwt from "jsonwebtoken";
 import { config } from "./config.ts";
 import { createHash, randomUUID } from "crypto";
 import { getPrivateKey, getPublicKey, getKid } from "./keys.ts";
+import { UserRole, UserScopes } from "./types.ts";
 
 export type AccessTokenPayload = {
   sub: string;
   username: string;
+  role: UserRole;
+  scopes: UserScopes;
   type: "access";
 };
 
@@ -16,11 +19,13 @@ export type RefreshTokenPayload = {
   type: "refresh";
 };
 
-export function signAccessToken(payload: { sub: string; username: string }) {
+export function signAccessToken(payload: { sub: string; username: string; role: UserRole; scopes: UserScopes }) {
   return jwt.sign(
     {
       sub: payload.sub,
       username: payload.username,
+      role: payload.role,
+      scopes: payload.scopes,
       type: "access",
     },
     getPrivateKey(),
