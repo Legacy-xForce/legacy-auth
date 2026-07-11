@@ -62,7 +62,6 @@ const previewActions = [
       <div class="field">
         <div class="flex items-center justify-between">
           <label for="password">Password</label>
-          <a href="#" class="text-sm text-accent no-underline">Forgot?</a>
         </div>
         <div class="input-wrap">
           <Icon name="lock" />

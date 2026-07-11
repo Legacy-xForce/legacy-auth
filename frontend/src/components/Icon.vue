@@ -24,6 +24,7 @@ const icons: Record<string, string> = {
   briefcase: "lucide:briefcase",
   arrowRight: "lucide:arrow-right",
   logout: "lucide:log-out",
+  menu: "lucide:menu",
   x: "lucide:x",
   eye: "lucide:eye",
   eyeOff: "lucide:eye-off",

@@ -15,7 +15,6 @@ const user = ref<User | null>(null);
 const username = ref("");
 const role = ref<"admin" | "user">("user");
 const active = ref(true);
-const locked = ref(false);
 const calendarScope = ref(false);
 const trackerScope = ref(false);
 const password = ref("");
@@ -30,7 +29,6 @@ function applyUser(u: User) {
   username.value = u.username;
   role.value = u.role;
   active.value = u.active;
-  locked.value = u.locked;
   calendarScope.value = u.scopes.calendar;
   trackerScope.value = u.scopes.tracker;
 }
@@ -74,7 +72,6 @@ async function save() {
       username: username.value.trim(),
       role: role.value,
       active: active.value,
-      locked: locked.value,
       scopes: { calendar: calendarScope.value, tracker: trackerScope.value },
     };
     if (password.value) {
@@ -103,14 +100,14 @@ function discard() {
       <span>Edit User</span>
     </div>
 
-    <div class="mb-6 flex items-start justify-between gap-4">
+    <div class="mb-6 flex flex-col items-start gap-4 sm:flex-row sm:items-start sm:justify-between">
       <div>
         <h1 class="m-0 mb-1 text-2xl font-bold">Edit Identity</h1>
         <p class="m-0 text-sm text-text-muted">Modify access scopes, credentials, and profile configuration.</p>
       </div>
-      <div class="flex shrink-0 gap-2.5">
-        <button class="btn btn-ghost" @click="discard">Discard</button>
-        <button class="btn btn-primary" :disabled="saving" @click="save">
+      <div class="flex w-full shrink-0 gap-2.5 sm:w-auto">
+        <button class="btn btn-ghost flex-1 sm:flex-none" @click="discard">Discard</button>
+        <button class="btn btn-primary flex-1 sm:flex-none" :disabled="saving" @click="save">
           {{ saving ? "Saving…" : "Save Changes" }}
         </button>
       </div>
@@ -130,9 +127,9 @@ function discard() {
         <div class="mt-3.5 font-bold">{{ user.username }}</div>
         <span
           class="mt-2 rounded-full px-2.5 py-1 text-xs"
-          :class="!active || locked ? 'bg-bg-input text-text-dim' : 'bg-success-soft text-success'"
+          :class="active ? 'bg-success-soft text-success' : 'bg-bg-input text-text-dim'"
         >
-          {{ locked ? "Locked Account" : active ? "Active Account" : "Inactive Account" }}
+          {{ active ? "Active Account" : "Inactive Account" }}
         </span>
       </div>
 
@@ -147,9 +144,9 @@ function discard() {
 
           <div class="field mb-4">
             <label>Password</label>
-            <div class="flex gap-2.5">
+            <div class="flex flex-col gap-2.5 sm:flex-row">
               <PasswordInput v-model="password" class="input" placeholder="Leave blank to keep current password" />
-              <button type="button" class="btn btn-ghost" @click="generatePassword">
+              <button type="button" class="btn btn-ghost shrink-0" @click="generatePassword">
                 <Icon name="key" :size="14" />
                 Generate
               </button>
@@ -174,17 +171,6 @@ function discard() {
               <ToggleSwitch v-model="active" />
             </div>
           </div>
-
-          <div class="mt-2 flex items-center justify-between gap-4 border-t border-border pt-3.5">
-            <div>
-              <div class="text-[0.88rem] font-semibold">Lock Account</div>
-              <div class="mt-0.5 max-w-80 text-xs text-text-dim">Immediately blocks sign-in and revokes active sessions.</div>
-            </div>
-            <div class="flex shrink-0 items-center gap-2.5 text-[0.82rem] text-text-muted">
-              <span>{{ locked ? "Locked" : "Unlocked" }}</span>
-              <ToggleSwitch v-model="locked" />
-            </div>
-          </div>
         </div>
 
         <div class="card p-6">
@@ -198,7 +184,7 @@ function discard() {
               </div>
               <div>
                 <div class="text-[0.88rem] font-semibold">Calendar</div>
-                <div class="mt-0.5 max-w-80 text-xs text-text-dim">Grants read/write access to team scheduling and events API.</div>
+                <div class="mt-0.5 max-w-80 text-xs text-text-dim">Enables access to the Legacy Calendar application</div>
               </div>
             </div>
             <ToggleSwitch v-model="calendarScope" />
@@ -211,7 +197,7 @@ function discard() {
               </div>
               <div>
                 <div class="text-[0.88rem] font-semibold">Tracker</div>
-                <div class="mt-0.5 max-w-80 text-xs text-text-dim">Enables time-tracking, analytics dashboards, and productivity logging.</div>
+                <div class="mt-0.5 max-w-80 text-xs text-text-dim">Enables access to the Legacy Tracker application</div>
               </div>
             </div>
             <ToggleSwitch v-model="trackerScope" />

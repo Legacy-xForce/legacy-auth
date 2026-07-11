@@ -37,6 +37,35 @@ body {
   @apply text-text-dim;
 }
 
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border-strong) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: var(--color-border-strong);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-accent);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 @layer components {
   .btn {
     @apply inline-flex items-center justify-center gap-1.5 rounded-ui border border-transparent px-4.5 py-2.5 text-sm font-semibold no-underline transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50;
@@ -68,7 +97,7 @@ body {
 
   .input-wrap > svg,
   .input-wrap > .iconify {
-    @apply pointer-events-none absolute left-3 text-text-dim;
+    @apply pointer-events-none absolute left-3 z-10 text-text-dim;
   }
 
   .input-wrap .input {

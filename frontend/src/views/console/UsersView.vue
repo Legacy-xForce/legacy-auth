@@ -58,34 +58,34 @@ const rangeEnd = computed(() => Math.min(total.value, page.value * pageSize));
 
 <template>
   <div class="flex h-full min-h-0 flex-col">
-    <div class="mb-6 flex shrink-0 items-start justify-between gap-4">
+    <div class="mb-6 flex shrink-0 flex-col items-start gap-4 sm:flex-row sm:items-start sm:justify-between">
       <div>
         <h1 class="m-0 mb-1 text-2xl font-bold">User Management</h1>
         <p class="m-0 text-sm text-text-muted">Manage authentication identities, roles, and access controls.</p>
       </div>
-      <RouterLink :to="{ name: 'user-new' }" class="btn btn-primary">
+      <RouterLink :to="{ name: 'user-new' }" class="btn btn-primary w-full sm:w-auto">
         <Icon name="plus" :size="16" />
         Add New User
       </RouterLink>
     </div>
 
-    <div class="card flex min-h-0 flex-1 flex-col p-5">
-      <div class="mb-4 flex shrink-0 flex-wrap items-center gap-3">
-        <div class="input-wrap max-w-80 flex-1">
+    <div class="card flex min-h-0 flex-1 flex-col p-4 sm:p-5">
+      <div class="mb-4 flex shrink-0 flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+        <div class="input-wrap w-full min-w-0 sm:max-w-80 sm:flex-1">
           <Icon name="search" />
           <input v-model="search" class="input" placeholder="Filter by username…" />
         </div>
-        <select v-model="role" class="input w-auto pr-8">
+        <select v-model="role" class="input w-full sm:w-auto sm:pr-8">
           <option value="">All Roles</option>
           <option value="admin">Admin</option>
           <option value="user">User</option>
         </select>
-        <div class="flex-1" />
+        <div class="hidden flex-1 sm:block" />
         <span class="whitespace-nowrap text-xs text-text-dim">Showing {{ rangeStart }}-{{ rangeEnd }} of {{ total }} users</span>
       </div>
 
-      <div class="min-h-0 flex-1 overflow-y-auto">
-        <table class="w-full border-collapse">
+      <div class="min-h-0 flex-1 overflow-auto">
+        <table class="w-full min-w-135 border-collapse">
           <thead>
             <tr>
               <th class="border-b border-border px-3 py-2.5 text-left text-[0.72rem] font-semibold uppercase tracking-wider text-text-dim">Profile</th>
@@ -120,11 +120,8 @@ const rangeEnd = computed(() => Math.min(total.value, page.value * pageSize));
                   {{ user.role === "admin" ? "Admin" : "User" }}
                 </span>
               </td>
-              <td class="border-b border-border px-3 py-3 align-middle text-sm"><StatusPill :active="user.active" :locked="user.locked" /></td>
+              <td class="border-b border-border px-3 py-3 align-middle text-sm"><StatusPill :active="user.active" /></td>
               <td class="whitespace-nowrap border-b border-border px-3 py-3 text-right align-middle text-sm">
-                <button class="icon-btn" title="Activity history (coming soon)" disabled>
-                  <Icon name="history" :size="16" />
-                </button>
                 <RouterLink :to="{ name: 'user-edit', params: { id: user.id } }" class="icon-btn">
                   <Icon name="pencil" :size="16" />
                 </RouterLink>

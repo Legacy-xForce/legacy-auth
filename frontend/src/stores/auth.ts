@@ -11,7 +11,6 @@ export type User = {
   username: string;
   role: "admin" | "user";
   active: boolean;
-  locked: boolean;
   scopes: UserScopes;
   created_at: string;
   updated_at: string;

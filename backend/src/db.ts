@@ -5,7 +5,7 @@ import { createHash } from "crypto";
 
 const sql = new SQL(config.dbUrl);
 
-const USER_COLUMNS = "id, username, password_hash, role, active, locked, scopes, created_at, updated_at";
+const USER_COLUMNS = "id, username, password_hash, role, active, scopes, created_at, updated_at";
 
 const DEFAULT_SCOPES: UserScopes = { calendar: false, tracker: false };
 
@@ -51,7 +51,7 @@ export async function initDatabase() {
 
     await bootstrapSql`
       ALTER TABLE users
-      ADD COLUMN IF NOT EXISTS locked boolean NOT NULL DEFAULT false;
+      DROP COLUMN IF EXISTS locked;
     `;
 
     await bootstrapSql`
@@ -85,9 +85,9 @@ export async function findUserByUsername(username: string): Promise<UserRecord |
   return normalizeUser(result[0]) ?? null;
 }
 
-export async function findUserActiveByUsername(username: string): Promise<Pick<UserRecord, "id" | "active" | "locked"> | null> {
-  const result = await sql<Pick<UserRecord, "id" | "active" | "locked">[]>`
-    SELECT id, active, locked FROM users WHERE username = ${username} LIMIT 1;
+export async function findUserActiveByUsername(username: string): Promise<Pick<UserRecord, "id" | "active"> | null> {
+  const result = await sql<Pick<UserRecord, "id" | "active">[]>`
+    SELECT id, active FROM users WHERE username = ${username} LIMIT 1;
   `;
   return result[0] ?? null;
 }
@@ -161,7 +161,6 @@ export type UserProfileUpdate = {
   username?: string;
   role?: UserRole;
   active?: boolean;
-  locked?: boolean;
 };
 
 export async function updateUserProfile(userId: string, update: UserProfileUpdate): Promise<UserRecord | null> {
@@ -171,14 +170,12 @@ export async function updateUserProfile(userId: string, update: UserProfileUpdat
   const username = update.username ?? existing.username;
   const role = update.role ?? existing.role;
   const active = update.active === undefined ? existing.active : update.active;
-  const locked = update.locked === undefined ? existing.locked : update.locked;
 
   const result = await sql<UserRecord[]>`
     UPDATE users
     SET username = ${username},
         role = ${role},
         active = ${active},
-        locked = ${locked},
         updated_at = now()
     WHERE id = ${userId}
     RETURNING ${sql.unsafe(USER_COLUMNS)};

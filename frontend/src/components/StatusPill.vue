@@ -1,10 +1,9 @@
 <script setup lang="ts">
 import { computed } from "vue";
 
-const props = defineProps<{ active: boolean; locked: boolean }>();
+const props = defineProps<{ active: boolean }>();
 
 const status = computed(() => {
-  if (props.locked) return { label: "Locked", class: "text-danger" };
   if (props.active) return { label: "Active", class: "text-success" };
   return { label: "Inactive", class: "text-text-dim" };
 });

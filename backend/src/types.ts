@@ -11,7 +11,6 @@ export type UserRecord = {
   password_hash: string;
   role: UserRole;
   active: boolean;
-  locked: boolean;
   scopes: UserScopes;
   created_at: string;
   updated_at: string;

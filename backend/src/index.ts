@@ -116,10 +116,6 @@ async function handleLogin(request: Request) {
       invalidateCachedUser(username);
       return new Response(JSON.stringify({ error: "Invalid credentials" }), { status: 401, headers: withCorsHeaders(jsonHeaders) });
     }
-    if (status.locked) {
-      invalidateCachedUser(username);
-      return new Response(JSON.stringify({ error: "Account locked" }), { status: 403, headers: withCorsHeaders(jsonHeaders) });
-    }
     if (!status.active) {
       invalidateCachedUser(username);
       return new Response(JSON.stringify({ error: "Account disabled" }), { status: 403, headers: withCorsHeaders(jsonHeaders) });
@@ -127,15 +123,11 @@ async function handleLogin(request: Request) {
     user = {
       ...user,
       active: status.active,
-      locked: status.locked,
     };
   } else {
     const record = await findUserByUsername(username);
     if (!record) {
       return new Response(JSON.stringify({ error: "Invalid credentials" }), { status: 401, headers: withCorsHeaders(jsonHeaders) });
-    }
-    if (record.locked) {
-      return new Response(JSON.stringify({ error: "Account locked" }), { status: 403, headers: withCorsHeaders(jsonHeaders) });
     }
     if (!record.active) {
       return new Response(JSON.stringify({ error: "Account disabled" }), { status: 403, headers: withCorsHeaders(jsonHeaders) });
@@ -146,7 +138,6 @@ async function handleLogin(request: Request) {
       password_hash: record.password_hash,
       role: record.role,
       active: record.active,
-      locked: record.locked,
       scopes: record.scopes,
     };
     cacheUser(user);
@@ -167,7 +158,6 @@ async function handleLogin(request: Request) {
         password_hash: updatedUser.password_hash,
         role: updatedUser.role,
         active: updatedUser.active,
-        locked: updatedUser.locked,
         scopes: updatedUser.scopes,
       };
       cacheUser(user);
@@ -217,11 +207,6 @@ async function handleRefresh(request: Request) {
     await revokeRefreshToken(payload.jti);
     invalidateCachedUser(payload.username);
     return new Response(JSON.stringify({ error: "Invalid or revoked refresh token" }), { status: 401, headers: withCorsHeaders(jsonHeaders) });
-  }
-  if (user.locked) {
-    await revokeAllRefreshTokensForUser(user.id);
-    invalidateCachedUser(payload.username);
-    return new Response(JSON.stringify({ error: "Account locked" }), { status: 403, headers: withCorsHeaders(jsonHeaders) });
   }
   if (!user.active) {
     await revokeAllRefreshTokensForUser(user.id);
@@ -290,11 +275,6 @@ async function handleChangePassword(request: Request) {
   if (!user) {
     return new Response(JSON.stringify({ error: "Invalid access token" }), { status: 401, headers: withCorsHeaders(jsonHeaders) });
   }
-  if (user.locked) {
-    await revokeAllRefreshTokensForUser(user.id);
-    invalidateCachedUser(user.username);
-    return new Response(JSON.stringify({ error: "Account locked" }), { status: 403, headers: withCorsHeaders(jsonHeaders) });
-  }
   if (!user.active) {
     await revokeAllRefreshTokensForUser(user.id);
     invalidateCachedUser(user.username);
@@ -336,8 +316,8 @@ async function handleUploadProfilePicture(request: Request) {
   if (!user) {
     return new Response(JSON.stringify({ error: "Invalid access token" }), { status: 401, headers: withCorsHeaders(jsonHeaders) });
   }
-  if (!user.active || user.locked) {
-    return new Response(JSON.stringify({ error: user.locked ? "Account locked" : "Account disabled" }), { status: 403, headers: withCorsHeaders(jsonHeaders) });
+  if (!user.active) {
+    return new Response(JSON.stringify({ error: "Account disabled" }), { status: 403, headers: withCorsHeaders(jsonHeaders) });
   }
 
   return await performAvatarUpload(request, user.id);
@@ -430,9 +410,6 @@ async function authenticate(request: Request): Promise<UserRecord | Response> {
   if (!user) {
     return unauthorized("Invalid access token");
   }
-  if (user.locked) {
-    return unauthorized("Account locked", 403);
-  }
   if (!user.active) {
     return unauthorized("Account disabled", 403);
   }
@@ -456,7 +433,6 @@ function toPublicUser(user: UserRecord) {
     username: user.username,
     role: user.role,
     active: user.active,
-    locked: user.locked,
     scopes: user.scopes,
     created_at: user.created_at,
     updated_at: user.updated_at,
@@ -566,7 +542,6 @@ async function handleUpdateUser(request: Request, id: string) {
     username?: string;
     role?: string;
     active?: boolean;
-    locked?: boolean;
     password?: string;
     scopes?: { calendar?: boolean; tracker?: boolean };
   }>(request);
@@ -577,11 +552,10 @@ async function handleUpdateUser(request: Request, id: string) {
   }
   const previousUsername = user.username;
 
-  const profileUpdate: { username?: string; role?: UserRole; active?: boolean; locked?: boolean } = {};
+  const profileUpdate: { username?: string; role?: UserRole; active?: boolean } = {};
   if (body.username !== undefined) profileUpdate.username = String(body.username).trim();
   if (body.role !== undefined) profileUpdate.role = normalizeRole(body.role);
   if (body.active !== undefined) profileUpdate.active = Boolean(body.active);
-  if (body.locked !== undefined) profileUpdate.locked = Boolean(body.locked);
 
   try {
     if (Object.keys(profileUpdate).length > 0) {
@@ -609,7 +583,7 @@ async function handleUpdateUser(request: Request, id: string) {
     return new Response(JSON.stringify({ error: message }), { status: 500, headers: withCorsHeaders(jsonHeaders) });
   }
 
-  if (user.locked || !user.active) {
+  if (!user.active) {
     await revokeAllRefreshTokensForUser(id);
   }
   invalidateCachedUser(previousUsername);

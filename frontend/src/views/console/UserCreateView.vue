@@ -52,14 +52,14 @@ async function create() {
       <span>Add New User</span>
     </div>
 
-    <div class="mb-6 flex items-start justify-between gap-4">
+    <div class="mb-6 flex flex-col items-start gap-4 sm:flex-row sm:items-start sm:justify-between">
       <div>
         <h1 class="m-0 mb-1 text-2xl font-bold">Add New User</h1>
         <p class="m-0 text-sm text-text-muted">Create a new authentication identity.</p>
       </div>
-      <div class="flex gap-2.5">
-        <RouterLink :to="{ name: 'users' }" class="btn btn-ghost">Cancel</RouterLink>
-        <button class="btn btn-primary" :disabled="saving" @click="create">
+      <div class="flex w-full gap-2.5 sm:w-auto">
+        <RouterLink :to="{ name: 'users' }" class="btn btn-ghost flex-1 sm:flex-none">Cancel</RouterLink>
+        <button class="btn btn-primary flex-1 sm:flex-none" :disabled="saving" @click="create">
           {{ saving ? "Creating…" : "Create User" }}
         </button>
       </div>
@@ -74,9 +74,9 @@ async function create() {
       </div>
       <div class="field mb-4">
         <label>Password</label>
-        <div class="flex gap-2.5">
+        <div class="flex flex-col gap-2.5 sm:flex-row">
           <PasswordInput v-model="password" class="input" autocomplete="new-password" />
-          <button type="button" class="btn btn-ghost" @click="generatePassword">
+          <button type="button" class="btn btn-ghost shrink-0" @click="generatePassword">
             <Icon name="key" :size="14" />
             Generate
           </button>
