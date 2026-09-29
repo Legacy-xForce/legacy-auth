@@ -25,3 +25,13 @@ export type RefreshTokenRecord = {
   revoked_at: string | null;
   created_at: string;
 };
+
+export type PasskeyCredentialRecord = {
+  id: string;
+  user_id: string;
+  public_key: string;
+  counter: string | number;
+  device_name: string | null;
+  created_at: string;
+};
+

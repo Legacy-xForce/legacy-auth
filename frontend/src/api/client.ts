@@ -69,7 +69,25 @@ export const api = {
     request<T>(path, { method: "PATCH", body: JSON.stringify(body ?? {}) }),
   delete: <T>(path: string) => request<T>(path, { method: "DELETE" }),
   postForm: <T>(path: string, formData: FormData) => request<T>(path, { method: "POST", body: formData }),
+
+  // Passkey
+  getPasskeyLoginOptions: (username?: string) =>
+    request<any>("/auth/passkey/login-options", { method: "POST", body: JSON.stringify({ username }) }),
+  verifyPasskeyLogin: (assertion: any) =>
+    request<any>("/auth/passkey/login-verify", { method: "POST", body: JSON.stringify(assertion) }),
+  getPasskeyRegisterOptions: () =>
+    request<any>("/auth/passkey/register-options", { method: "POST", body: JSON.stringify({}) }),
+  verifyPasskeyRegister: (credential: any) =>
+    request<{ success: boolean; credentialId: string; deviceName: string }>("/auth/passkey/register-verify", {
+      method: "POST",
+      body: JSON.stringify(credential),
+    }),
+  getPasskeys: () =>
+    request<Array<{ id: string; deviceName: string; createdAt: string }>>("/auth/passkey/credentials", { method: "GET" }),
+  deletePasskey: (id: string) =>
+    request<{ success: boolean }>(`/auth/passkey/credentials/${encodeURIComponent(id)}`, { method: "DELETE" }),
 };
+
 
 export function avatarUrl(userId: string) {
   return `${API_URL}/auth/profile-picture/${userId}`;

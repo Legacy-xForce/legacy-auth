@@ -1,6 +1,7 @@
 import { SQL } from "bun";
-import { UserRecord, RefreshTokenRecord, UserRole, UserScopes } from "./types.ts";
+import { UserRecord, RefreshTokenRecord, PasskeyCredentialRecord, UserRole, UserScopes } from "./types.ts";
 import { config } from "./config.ts";
+
 import { createHash } from "crypto";
 
 const sql = new SQL(config.dbUrl);
@@ -69,6 +70,22 @@ export async function initDatabase() {
         revoked_at timestamptz,
         created_at timestamptz NOT NULL DEFAULT now()
       );
+    `;
+
+    await bootstrapSql`
+      CREATE TABLE IF NOT EXISTS passkey_credentials (
+        id text PRIMARY KEY,
+        user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        public_key text NOT NULL,
+        counter bigint NOT NULL DEFAULT 0,
+        device_name text,
+        created_at timestamptz NOT NULL DEFAULT now()
+      );
+    `;
+
+    await bootstrapSql`
+      CREATE INDEX IF NOT EXISTS idx_passkey_credentials_user_id
+      ON passkey_credentials(user_id);
     `;
   } finally {
     await bootstrapSql.close({ timeout: 0 });
@@ -283,3 +300,99 @@ function hashToken(token: string) {
 export async function verifyRefreshTokenHash(token: string, tokenHash: string): Promise<boolean> {
   return hashToken(token) === tokenHash;
 }
+
+export async function savePasskeyCredential(
+  id: string,
+  userId: string,
+  publicKey: string,
+  deviceName?: string
+): Promise<PasskeyCredentialRecord> {
+  const result = await sql<PasskeyCredentialRecord[]>`
+    INSERT INTO passkey_credentials (id, user_id, public_key, device_name)
+    VALUES (${id}, ${userId}, ${publicKey}, ${deviceName ?? null})
+    ON CONFLICT (id) DO UPDATE
+    SET public_key = EXCLUDED.public_key,
+        device_name = EXCLUDED.device_name,
+        user_id = EXCLUDED.user_id
+    RETURNING id, user_id, public_key, counter, device_name, created_at;
+  `;
+  return result[0];
+}
+
+export async function findPasskeyCredentialWithUser(
+  id: string
+): Promise<(PasskeyCredentialRecord & { user: UserRecord }) | null> {
+  const result = await sql<any[]>`
+    SELECT
+      c.id, c.user_id, c.public_key, c.counter, c.device_name, c.created_at,
+      u.id AS u_id, u.username, u.password_hash, u.role, u.active, u.scopes,
+      u.created_at AS u_created_at, u.updated_at AS u_updated_at
+    FROM passkey_credentials c
+    JOIN users u ON u.id = c.user_id
+    WHERE c.id = ${id}
+    LIMIT 1;
+  `;
+  const row = result[0];
+  if (!row) return null;
+  const user: UserRecord = normalizeUser({
+    id: row.u_id,
+    username: row.username,
+    password_hash: row.password_hash,
+    role: row.role,
+    active: row.active,
+    scopes: row.scopes,
+    created_at: row.u_created_at,
+    updated_at: row.u_updated_at,
+  });
+  return {
+    id: row.id,
+    user_id: row.user_id,
+    public_key: row.public_key,
+    counter: row.counter,
+    device_name: row.device_name,
+    created_at: row.created_at,
+    user,
+  };
+}
+
+export async function findPasskeyCredentialsByUserId(
+  userId: string
+): Promise<PasskeyCredentialRecord[]> {
+  return await sql<PasskeyCredentialRecord[]>`
+    SELECT id, user_id, public_key, counter, device_name, created_at
+    FROM passkey_credentials
+    WHERE user_id = ${userId}
+    ORDER BY created_at DESC;
+  `;
+}
+
+export async function findPasskeyCredentialsByUsername(
+  username: string
+): Promise<PasskeyCredentialRecord[]> {
+  const result = await sql<PasskeyCredentialRecord[]>`
+    SELECT c.id, c.user_id, c.public_key, c.counter, c.device_name, c.created_at
+    FROM passkey_credentials c
+    JOIN users u ON u.id = c.user_id
+    WHERE u.username = ${username}
+    ORDER BY c.created_at DESC;
+  `;
+  return result;
+}
+
+export async function updatePasskeyCounter(id: string, counter: number | bigint): Promise<void> {
+  await sql`
+    UPDATE passkey_credentials
+    SET counter = ${counter}
+    WHERE id = ${id};
+  `;
+}
+
+export async function deletePasskeyCredential(id: string, userId: string): Promise<boolean> {
+  const result = await sql<{ id: string }[]>`
+    DELETE FROM passkey_credentials
+    WHERE id = ${id} AND user_id = ${userId}
+    RETURNING id;
+  `;
+  return result.length > 0;
+}
+

@@ -80,6 +80,114 @@ export function createOpenApiDocument(): OpenApiDocument {
           },
         },
       },
+      "/auth/passkey/login-options": {
+        post: {
+          tags: ["Passkey"],
+          summary: "Generate WebAuthn login options",
+          requestBody: {
+            required: false,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: { username: { type: "string" } },
+                },
+              },
+            },
+          },
+          responses: {
+            "200": { description: "WebAuthn assertion options" },
+          },
+        },
+      },
+      "/auth/passkey/login-verify": {
+        post: {
+          tags: ["Passkey"],
+          summary: "Verify WebAuthn assertion and issue tokens",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { type: "object" },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              description: "Tokens issued successfully",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/TokenResponse" },
+                },
+              },
+            },
+            "401": { description: "Invalid passkey signature or replay detected" },
+            "403": { description: "Account disabled" },
+          },
+        },
+      },
+      "/auth/passkey/register-options": {
+        post: {
+          tags: ["Passkey"],
+          summary: "Generate WebAuthn registration options",
+          security: [{ bearerAuth: [] }],
+          responses: {
+            "200": { description: "WebAuthn creation options" },
+            "401": { description: "Unauthorized" },
+          },
+        },
+      },
+      "/auth/passkey/register-verify": {
+        post: {
+          tags: ["Passkey"],
+          summary: "Verify WebAuthn registration and store passkey credential",
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { type: "object" },
+              },
+            },
+          },
+          responses: {
+            "200": { description: "Credential registered successfully" },
+            "400": { description: "Invalid credential payload" },
+            "401": { description: "Unauthorized" },
+          },
+        },
+      },
+      "/auth/passkey/credentials": {
+        get: {
+          tags: ["Passkey"],
+          summary: "List registered passkeys for current user",
+          security: [{ bearerAuth: [] }],
+          responses: {
+            "200": { description: "List of registered passkeys" },
+            "401": { description: "Unauthorized" },
+          },
+        },
+      },
+      "/auth/passkey/credentials/{id}": {
+        delete: {
+          tags: ["Passkey"],
+          summary: "Delete a registered passkey",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: "id",
+              in: "path",
+              required: true,
+              schema: { type: "string" },
+            },
+          ],
+          responses: {
+            "200": { description: "Passkey deleted" },
+            "401": { description: "Unauthorized" },
+            "404": { description: "Passkey not found" },
+          },
+        },
+      },
       "/auth/refresh": {
         post: {
           tags: ["Auth"],

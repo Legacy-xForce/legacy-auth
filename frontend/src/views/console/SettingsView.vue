@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { ref, onMounted } from "vue";
 import { api } from "../../api/client";
 import { useAuthStore } from "../../stores/auth";
+import { isPasskeySupported } from "../../services/webauthn";
 import Icon from "../../components/Icon.vue";
 import UserAvatar from "../../components/UserAvatar.vue";
 import PasswordInput from "../../components/PasswordInput.vue";
+import ConfirmDialog from "../../components/ConfirmDialog.vue";
 
 const auth = useAuthStore();
 
@@ -22,6 +24,23 @@ const passwordError = ref("");
 const avatarInput = ref<HTMLInputElement | null>(null);
 const avatarVersion = ref(0);
 const avatarError = ref("");
+
+const passkeySupported = isPasskeySupported();
+const passkeys = ref<Array<{ id: string; deviceName: string; createdAt: string }>>([]);
+const passkeyLoading = ref(false);
+const passkeyMessage = ref("");
+const passkeyError = ref("");
+const passkeyToDelete = ref<string | null>(null);
+
+onMounted(async () => {
+  if (passkeySupported) {
+    try {
+      passkeys.value = await api.getPasskeys();
+    } catch {
+      // ignore on mount
+    }
+  }
+});
 
 async function saveUsername() {
   usernameError.value = "";
@@ -80,6 +99,47 @@ async function onAvatarSelected(event: Event) {
     (event.target as HTMLInputElement).value = "";
   }
 }
+
+async function handleRegisterPasskey() {
+  passkeyError.value = "";
+  passkeyMessage.value = "";
+  passkeyLoading.value = true;
+  try {
+    const deviceName = window.prompt("Name this passkey", "My device") || undefined;
+    await auth.registerPasskey(deviceName);
+    passkeys.value = await api.getPasskeys();
+    passkeyMessage.value = "Passkey added successfully.";
+  } catch (err: any) {
+    if (err?.name === "NotAllowedError") {
+      passkeyError.value = "Passkey registration was cancelled.";
+    } else {
+      passkeyError.value = err instanceof Error ? err.message : "Failed to register passkey";
+    }
+  } finally {
+    passkeyLoading.value = false;
+  }
+}
+
+function confirmDeletePasskey(id: string) {
+  passkeyToDelete.value = id;
+}
+
+async function executeDeletePasskey() {
+  if (!passkeyToDelete.value) return;
+  passkeyError.value = "";
+  passkeyMessage.value = "";
+  passkeyLoading.value = true;
+  try {
+    await api.deletePasskey(passkeyToDelete.value);
+    passkeys.value = passkeys.value.filter((p) => p.id !== passkeyToDelete.value);
+    passkeyMessage.value = "Passkey removed.";
+  } catch (err) {
+    passkeyError.value = err instanceof Error ? err.message : "Could not remove passkey";
+  } finally {
+    passkeyLoading.value = false;
+    passkeyToDelete.value = null;
+  }
+}
 </script>
 
 <template>
@@ -132,6 +192,51 @@ async function onAvatarSelected(event: Event) {
       </button>
       <p v-if="passwordMessage" class="mt-2.5 text-[0.82rem] text-success">{{ passwordMessage }}</p>
       <p v-if="passwordError" class="mt-2.5 text-[0.82rem] text-danger">{{ passwordError }}</p>
+    </div>
+
+    <div v-if="passkeySupported" class="card p-6">
+      <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h3 class="m-0 mb-1 text-base">Passkeys &amp; Biometrics</h3>
+          <p class="m-0 text-sm text-text-muted">Sign in securely without a password using Touch ID, Face ID, or Windows Hello.</p>
+        </div>
+        <button class="btn btn-ghost" :disabled="passkeyLoading" @click="handleRegisterPasskey">
+          <Icon name="plus" :size="15" />
+          {{ passkeyLoading ? "Adding…" : "Add Passkey" }}
+        </button>
+      </div>
+
+      <div v-if="passkeys.length" class="divide-y divide-border overflow-hidden rounded-ui border border-border">
+        <div v-for="pk in passkeys" :key="pk.id" class="flex items-center justify-between bg-bg-card p-3.5">
+          <div class="flex items-center gap-3">
+            <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-accent-soft text-accent">
+              <Icon name="key" :size="16" />
+            </div>
+            <div>
+              <div class="text-sm font-medium text-text">{{ pk.deviceName || "Passkey" }}</div>
+              <div class="text-xs text-text-dim">Added {{ new Date(pk.createdAt).toLocaleDateString() }}</div>
+            </div>
+          </div>
+          <button class="btn btn-danger py-1.5 px-2.5 text-xs" :disabled="passkeyLoading" @click="confirmDeletePasskey(pk.id)">
+            <Icon name="trash" :size="14" />
+            Remove
+          </button>
+        </div>
+      </div>
+      <p v-else class="m-0 text-sm text-text-muted">No passkeys registered yet.</p>
+
+      <p v-if="passkeyMessage" class="mt-3 text-[0.82rem] text-success">{{ passkeyMessage }}</p>
+      <p v-if="passkeyError" class="mt-3 text-[0.82rem] text-danger">{{ passkeyError }}</p>
+
+      <ConfirmDialog
+        :open="Boolean(passkeyToDelete)"
+        title="Remove Passkey"
+        message="Are you sure you want to delete this passkey? You will no longer be able to use it to sign in."
+        confirm-label="Remove"
+        danger
+        @confirm="executeDeletePasskey"
+        @cancel="passkeyToDelete = null"
+      />
     </div>
   </div>
 </template>

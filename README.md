@@ -12,6 +12,9 @@ In production (see [Docker](#docker)), the backend serves the built frontend as 
 ## Features
 
 - `POST /auth/login` to authenticate users
+- `POST /auth/passkey/login-options` & `POST /auth/passkey/login-verify` for passkey / biometric authentication
+- `POST /auth/passkey/register-options` & `POST /auth/passkey/register-verify` to register passkeys
+- `GET /auth/passkey/credentials` & `DELETE /auth/passkey/credentials/:id` to manage registered passkeys
 - `POST /auth/refresh` to refresh access tokens
 - `POST /auth/logout` to revoke refresh tokens
 - `POST /auth/change-password` to change the authenticated user's password

@@ -1,5 +1,7 @@
 import { defineStore } from "pinia";
 import { api, configureApiClient, ApiError } from "../api/client";
+import { createPasskeyCredential, getPasskeyAssertion } from "../services/webauthn";
+
 
 export type UserScopes = {
   calendar: boolean;
@@ -53,6 +55,22 @@ export const useAuthStore = defineStore("auth", {
       const tokens = await api.post<TokenResponse>("/auth/login", { username, password });
       this.setTokens(tokens);
       await this.fetchMe();
+    },
+    async loginWithPasskey(username?: string) {
+      const options = await api.getPasskeyLoginOptions(username);
+      const assertion = await getPasskeyAssertion(options);
+      const tokens = await api.verifyPasskeyLogin(assertion);
+      this.setTokens(tokens);
+      await this.fetchMe();
+      return true;
+    },
+    async registerPasskey(deviceName?: string) {
+      const options = await api.getPasskeyRegisterOptions();
+      const credential = await createPasskeyCredential(options);
+      return await api.verifyPasskeyRegister({
+        ...credential,
+        deviceName,
+      });
     },
     async logout() {
       try {

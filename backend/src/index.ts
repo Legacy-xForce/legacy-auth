@@ -9,7 +9,16 @@ import { getJwks } from "./keys.ts";
 import { createOpenApiDocument } from "./openapi.ts";
 import { createSwaggerAssetResponse, createSwaggerUiResponse, jsonHeaders } from "./swagger.ts";
 import { saveAvatar, findAvatar, deleteAvatar, UnsupportedImageError, UUID_PATTERN } from "./avatars.ts";
+import {
+  generateLoginOptions,
+  verifyLogin,
+  generateRegisterOptions,
+  verifyRegister,
+  listCredentials,
+  deleteCredential,
+} from "./passkey.ts";
 import { join, normalize } from "path";
+
 
 const openApiDocument = createOpenApiDocument();
 
@@ -48,6 +57,26 @@ serve({
       if (request.method === "POST" && url.pathname === "/auth/change-password") {
         return await handleChangePassword(request);
       }
+      if (request.method === "POST" && url.pathname === "/auth/passkey/login-options") {
+        return await handlePasskeyLoginOptions(request);
+      }
+      if (request.method === "POST" && url.pathname === "/auth/passkey/login-verify") {
+        return await handlePasskeyLoginVerify(request);
+      }
+      if (request.method === "POST" && url.pathname === "/auth/passkey/register-options") {
+        return await handlePasskeyRegisterOptions(request);
+      }
+      if (request.method === "POST" && url.pathname === "/auth/passkey/register-verify") {
+        return await handlePasskeyRegisterVerify(request);
+      }
+      if (request.method === "GET" && url.pathname === "/auth/passkey/credentials") {
+        return await handlePasskeyListCredentials(request);
+      }
+      const passkeyCredentialMatch = url.pathname.match(/^\/auth\/passkey\/credentials\/([A-Za-z0-9_-]+)$/);
+      if (passkeyCredentialMatch && request.method === "DELETE") {
+        return await handlePasskeyDeleteCredential(request, passkeyCredentialMatch[1]);
+      }
+
       if (request.method === "POST" && url.pathname === "/auth/profile-picture") {
         return await handleUploadProfilePicture(request);
       }
@@ -85,7 +114,12 @@ serve({
       if (userAvatarMatch && request.method === "POST") {
         return await handleUploadUserAvatar(request, userAvatarMatch[1]);
       }
-      if (request.method === "GET") {
+      if (
+        request.method === "GET" &&
+        !url.pathname.startsWith("/auth/") &&
+        !url.pathname.startsWith("/admin/") &&
+        !url.pathname.startsWith("/.well-known/")
+      ) {
         const staticResponse = await tryServeFrontend(url.pathname);
         if (staticResponse) {
           return staticResponse;
@@ -299,6 +333,72 @@ async function handleChangePassword(request: Request) {
   invalidateCachedUser(updatedUser.username);
 
   return new Response(JSON.stringify({ success: true }), { status: 200, headers: withCorsHeaders(jsonHeaders) });
+}
+
+async function handlePasskeyLoginOptions(request: Request) {
+  const body = await parseJson<{ username?: string }>(request).catch(() => ({} as { username?: string }));
+  const username = typeof body.username === "string" && body.username.trim() ? body.username.trim() : undefined;
+  const options = await generateLoginOptions(username);
+  return new Response(JSON.stringify(options), { status: 200, headers: withCorsHeaders(jsonHeaders) });
+}
+
+async function handlePasskeyLoginVerify(request: Request) {
+  const body = await parseJson<any>(request);
+  try {
+    const result = await verifyLogin(body);
+    return new Response(JSON.stringify(result), { status: 200, headers: withCorsHeaders(jsonHeaders) });
+  } catch (error: any) {
+    const status = error.statusCode || 401;
+    return new Response(JSON.stringify({ error: error.message || "Passkey verification failed" }), {
+      status,
+      headers: withCorsHeaders(jsonHeaders),
+    });
+  }
+}
+
+async function handlePasskeyRegisterOptions(request: Request) {
+  const authResult = await authenticate(request);
+  if (authResult instanceof Response) return authResult;
+  const options = await generateRegisterOptions(authResult);
+  return new Response(JSON.stringify(options), { status: 200, headers: withCorsHeaders(jsonHeaders) });
+}
+
+async function handlePasskeyRegisterVerify(request: Request) {
+  const authResult = await authenticate(request);
+  if (authResult instanceof Response) return authResult;
+  const body = await parseJson<any>(request);
+  try {
+    const result = await verifyRegister(authResult.id, body);
+    return new Response(JSON.stringify(result), { status: 200, headers: withCorsHeaders(jsonHeaders) });
+  } catch (error: any) {
+    const status = error.statusCode || 400;
+    return new Response(JSON.stringify({ error: error.message || "Passkey registration failed" }), {
+      status,
+      headers: withCorsHeaders(jsonHeaders),
+    });
+  }
+}
+
+async function handlePasskeyListCredentials(request: Request) {
+  const authResult = await authenticate(request);
+  if (authResult instanceof Response) return authResult;
+  const list = await listCredentials(authResult.id);
+  return new Response(JSON.stringify(list), { status: 200, headers: withCorsHeaders(jsonHeaders) });
+}
+
+async function handlePasskeyDeleteCredential(request: Request, id: string) {
+  const authResult = await authenticate(request);
+  if (authResult instanceof Response) return authResult;
+  try {
+    const result = await deleteCredential(id, authResult.id);
+    return new Response(JSON.stringify(result), { status: 200, headers: withCorsHeaders(jsonHeaders) });
+  } catch (error: any) {
+    const status = error.statusCode || 400;
+    return new Response(JSON.stringify({ error: error.message || "Failed to delete passkey" }), {
+      status,
+      headers: withCorsHeaders(jsonHeaders),
+    });
+  }
 }
 
 async function handleUploadProfilePicture(request: Request) {
