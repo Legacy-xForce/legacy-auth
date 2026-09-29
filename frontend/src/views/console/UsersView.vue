@@ -54,14 +54,21 @@ onMounted(load);
 
 const rangeStart = computed(() => (total.value === 0 ? 0 : (page.value - 1) * pageSize + 1));
 const rangeEnd = computed(() => Math.min(total.value, page.value * pageSize));
+
+// UUID copy
+const copiedId = ref<string | null>(null);
+async function copyId(id: string) {
+  await navigator.clipboard.writeText(id);
+  copiedId.value = id;
+  setTimeout(() => { copiedId.value = null; }, 1500);
+}
 </script>
 
 <template>
-  <div class="flex h-full min-h-0 flex-col">
+  <div class="flex flex-col">
     <div class="mb-6 flex shrink-0 flex-col items-start gap-4 sm:flex-row sm:items-start sm:justify-between">
       <div>
         <h1 class="m-0 mb-1 text-2xl font-bold">User Management</h1>
-        <p class="m-0 text-sm text-text-muted">Manage authentication identities, roles, and access controls.</p>
       </div>
       <RouterLink :to="{ name: 'user-new' }" class="btn btn-primary w-full sm:w-auto">
         <Icon name="plus" :size="16" />
@@ -69,11 +76,22 @@ const rangeEnd = computed(() => Math.min(total.value, page.value * pageSize));
       </RouterLink>
     </div>
 
-    <div class="card flex min-h-0 flex-1 flex-col p-4 sm:p-5">
+    <div class="card flex flex-col p-4 sm:p-5">
       <div class="mb-4 flex shrink-0 flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
         <div class="input-wrap w-full min-w-0 sm:max-w-80 sm:flex-1">
           <Icon name="search" />
-          <input v-model="search" class="input" placeholder="Filter by username…" />
+          <input
+            v-model="search"
+            class="input"
+            placeholder="Filter by username…"
+            autofocus
+            autocomplete="off"
+            data-form-type="other"
+            data-lpignore="true"
+            data-1p-ignore
+            readonly
+            @focus="($event.target as HTMLInputElement).removeAttribute('readonly')"
+          />
         </div>
         <select v-model="role" class="input w-full sm:w-auto sm:pr-8">
           <option value="">All Roles</option>
@@ -84,7 +102,7 @@ const rangeEnd = computed(() => Math.min(total.value, page.value * pageSize));
         <span class="whitespace-nowrap text-xs text-text-dim">Showing {{ rangeStart }}-{{ rangeEnd }} of {{ total }} users</span>
       </div>
 
-      <div class="min-h-0 flex-1 overflow-auto">
+      <div class="overflow-x-auto">
         <table class="w-full min-w-135 border-collapse">
           <thead>
             <tr>
@@ -107,7 +125,21 @@ const rangeEnd = computed(() => Math.min(total.value, page.value * pageSize));
                   <UserAvatar :user-id="user.id" :size="36" />
                   <div>
                     <div class="font-semibold">{{ user.username }}</div>
-                    <div class="font-mono text-[0.72rem] text-text-dim" :title="user.id">{{ user.id.slice(0, 8) }}&hellip;</div>
+                    <button
+                      class="group flex items-center gap-1 font-mono text-[0.72rem] text-text-dim transition-colors hover:text-text-muted"
+                      :title="copiedId === user.id ? 'Copied!' : 'Click to copy UUID'"
+                      @click="copyId(user.id)"
+                    >
+                      <span class="truncate md:max-w-none max-w-[10ch]">
+                        {{ user.id }}
+                      </span>
+                      <Icon
+                        :name="copiedId === user.id ? 'check' : 'copy'"
+                        :size="10"
+                        class="shrink-0 opacity-0 transition-opacity group-hover:opacity-100"
+                        :class="copiedId === user.id ? 'text-green-500' : ''"
+                      />
+                    </button>
                   </div>
                 </div>
               </td>

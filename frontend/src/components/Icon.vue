@@ -30,6 +30,8 @@ const icons: Record<string, string> = {
   eyeOff: "lucide:eye-off",
   trash: "lucide:trash-2",
   alertTriangle: "lucide:triangle-alert",
+  copy: "lucide:copy",
+  check: "lucide:check",
 };
 </script>
 

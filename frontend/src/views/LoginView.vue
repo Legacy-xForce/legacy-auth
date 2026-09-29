@@ -32,12 +32,6 @@ async function onSubmit() {
     loading.value = false;
   }
 }
-
-const previewActions = [
-  { icon: "key", title: "Reset Password", desc: "Enforce new security credentials" },
-  { icon: "user", title: "Update Avatar", desc: "Change profile picture" },
-  { icon: "briefcase", title: "Change Username", desc: "Modify system handle" },
-];
 </script>
 
 <template>
@@ -82,25 +76,5 @@ const previewActions = [
         <Icon name="arrowRight" :size="16" />
       </button>
     </form>
-
-    <div class="my-10 flex w-full max-w-160 items-center gap-4 text-[0.72rem] uppercase tracking-wider text-text-dim">
-      <span class="h-px flex-1 bg-border" />
-      <span>Console Preview</span>
-      <span class="h-px flex-1 bg-border" />
-    </div>
-
-    <div class="w-full max-w-160 text-center">
-      <h2 class="m-0 text-lg font-bold">Quick Profile Actions</h2>
-      <p class="mb-6 mt-1.5 text-sm text-text-muted">Available immediately upon authentication</p>
-      <div class="grid grid-cols-3 gap-4 max-[560px]:grid-cols-1">
-        <div v-for="action in previewActions" :key="action.title" class="card p-5 text-center">
-          <div class="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-bg-input text-text-muted">
-            <Icon :name="action.icon" :size="20" />
-          </div>
-          <div class="text-sm font-semibold">{{ action.title }}</div>
-          <div class="mt-1 text-xs text-text-dim">{{ action.desc }}</div>
-        </div>
-      </div>
-    </div>
   </div>
 </template>
