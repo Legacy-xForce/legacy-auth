@@ -15,10 +15,18 @@ const role = ref<"admin" | "user">("user");
 const active = ref(true);
 const error = ref("");
 const saving = ref(false);
+const copied = ref(false);
 
 function generatePassword() {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#$%";
   password.value = Array.from({ length: 16 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+}
+
+async function copyPassword() {
+  if (!password.value) return;
+  await navigator.clipboard.writeText(password.value);
+  copied.value = true;
+  setTimeout(() => { copied.value = false; }, 1500);
 }
 
 async function create() {
@@ -67,31 +75,61 @@ async function create() {
 
     <p v-if="error" class="text-sm text-danger">{{ error }}</p>
 
-    <div class="card max-w-120 p-6">
-      <div class="field mb-4">
-        <label>Username</label>
-        <input v-model="username" class="input" autocomplete="off" />
-      </div>
-      <div class="field mb-4">
-        <label>Password</label>
-        <div class="flex flex-col gap-2.5 sm:flex-row">
-          <PasswordInput v-model="password" class="input" autocomplete="new-password" />
-          <button type="button" class="btn btn-ghost shrink-0" @click="generatePassword">
-            <Icon name="key" :size="14" />
-            Generate
-          </button>
+    <div class="flex justify-center">
+      <div class="card w-full max-w-120 p-6">
+        <div class="field mb-4">
+          <label>Username</label>
+          <input
+            v-model="username"
+            class="input"
+            autocomplete="off"
+            data-form-type="other"
+            data-lpignore="true"
+            data-1p-ignore
+            data-bwignore="true"
+          />
         </div>
-      </div>
-      <div class="field mb-4">
-        <label>Role</label>
-        <select v-model="role" class="input">
-          <option value="user">User</option>
-          <option value="admin">Admin</option>
-        </select>
-      </div>
-      <div class="flex items-center justify-between border-t border-border pt-3.5">
-        <div class="text-[0.88rem] font-semibold">Active</div>
-        <ToggleSwitch v-model="active" />
+        <div class="field mb-4">
+          <label>Password</label>
+          <div class="flex flex-col gap-2.5 sm:flex-row">
+            <PasswordInput
+              v-model="password"
+              class="input"
+              autocomplete="off"
+              data-form-type="other"
+              data-lpignore="true"
+              data-1p-ignore
+              data-bwignore="true"
+            />
+            <div class="flex shrink-0 gap-1.5">
+              <button
+                type="button"
+                class="btn btn-ghost flex-1 sm:flex-none"
+                :title="copied ? 'Copied!' : 'Copy password'"
+                :disabled="!password"
+                @click="copyPassword"
+              >
+                <Icon :name="copied ? 'check' : 'copy'" :size="14" :class="copied ? 'text-green-500' : ''" />
+                {{ copied ? "Copied!" : "Copy" }}
+              </button>
+              <button type="button" class="btn btn-ghost flex-1 sm:flex-none" @click="generatePassword">
+                <Icon name="key" :size="14" />
+                Generate
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="field mb-4">
+          <label>Role</label>
+          <select v-model="role" class="input">
+            <option value="user">User</option>
+            <option value="admin">Admin</option>
+          </select>
+        </div>
+        <div class="flex items-center justify-between border-t border-border pt-3.5">
+          <div class="text-[0.88rem] font-semibold">Active</div>
+          <ToggleSwitch v-model="active" />
+        </div>
       </div>
     </div>
   </div>
