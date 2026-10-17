@@ -49,6 +49,7 @@ Optional environment variables:
 - `AVATAR_STORAGE_DIR` - directory where profile picture files are stored on disk, relative to `backend/` (default: `./data/avatars`)
 - `AVATAR_MAX_UPLOAD_BYTES` - maximum accepted profile picture upload size in bytes (default: `8388608`, i.e. 8 MiB)
 - `FRONTEND_DIST_DIR` - directory of the built frontend to serve as static files, relative to `backend/` (default: `../frontend/dist`). If missing, the backend simply serves the API and returns `404` for unknown routes.
+- `PASSKEY_ANDROID_APPS` - comma-separated `<package>:<SHA-256 signing certificate fingerprint>` entries for Android apps allowed to use this host's passkeys (see [Android apps](#android-apps)). Unset, `/.well-known/assetlinks.json` returns `404`.
 
 Backend environment variables go in `backend/.env` (see `backend/.env.example`). The frontend has its own `frontend/.env` for `VITE_API_URL` (see `frontend/.env.example`) — only needed for local development against a separately-running backend; leave it unset in Docker/production since the frontend is served from the same origin as the API.
 
@@ -246,6 +247,18 @@ Set `JWT_PRIVATE_KEY` to the contents of `ec-private.pem`. In a `.env` file, new
 ```bash
 JWT_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nMIGH...\n-----END PRIVATE KEY-----"
 ```
+
+### Android apps
+
+`GET /.well-known/assetlinks.json`
+
+Passkeys belong to this service's host (the WebAuthn RP ID). A browser on that host can use them directly, but Android's passkey providers (Google Password Manager and others) only let a native app use them once this file names the app's package and signing certificate. Set `PASSKEY_ANDROID_APPS` to one entry per certificate that signs a build you want passkeys in:
+
+```bash
+PASSKEY_ANDROID_APPS=com.legacy.legacytracker:AB:CD:...:EF
+```
+
+`keytool -list -v -keystore <keystore>` (or `apksigner verify --print-certs app.apk`) prints the SHA-256 fingerprint. The file must be served over HTTPS at the RP ID host with no redirect.
 
 ### Admin API
 
