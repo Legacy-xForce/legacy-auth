@@ -319,6 +319,21 @@ export function createOpenApiDocument(): OpenApiDocument {
           },
         },
       },
+      "/.well-known/assetlinks.json": {
+        get: {
+          tags: ["Keys"],
+          summary: "Digital Asset Links",
+          description: "Lists the Android apps (package and signing certificate SHA-256) allowed to use this host's passkeys, from PASSKEY_ANDROID_APPS.",
+          responses: {
+            "200": {
+              description: "Asset Links statements",
+            },
+            "404": {
+              description: "No Android apps configured",
+            },
+          },
+        },
+      },
       "/openapi.json": {
         get: {
           tags: ["Docs"],

@@ -6,6 +6,7 @@ import { UserRecord, UserRole, UserScopes } from "./types.ts";
 import { getCachedUser, cacheUser, invalidateCachedUser } from "./cache.ts";
 import { signAccessToken, signRefreshToken, verifyAccessToken, verifyRefreshToken, getRefreshTokenExpiresAt } from "./jwt.ts";
 import { getJwks } from "./keys.ts";
+import { assetLinks } from "./asset-links.ts";
 import { createOpenApiDocument } from "./openapi.ts";
 import { createSwaggerAssetResponse, createSwaggerUiResponse, jsonHeaders } from "./swagger.ts";
 import { saveAvatar, findAvatar, deleteAvatar, UnsupportedImageError, UUID_PATTERN } from "./avatars.ts";
@@ -85,6 +86,12 @@ serve({
       }
       if (request.method === "GET" && url.pathname === "/.well-known/jwks.json") {
         return new Response(JSON.stringify(getJwks()), { status: 200, headers: withCorsHeaders(jsonHeaders) });
+      }
+      if (request.method === "GET" && url.pathname === "/.well-known/assetlinks.json") {
+        const statements = assetLinks();
+        if (statements) {
+          return new Response(JSON.stringify(statements), { status: 200, headers: withCorsHeaders(jsonHeaders) });
+        }
       }
       if (request.method === "GET" && url.pathname === "/auth/me") {
         return await handleGetMe(request);

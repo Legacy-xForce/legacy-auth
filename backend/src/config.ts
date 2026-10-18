@@ -10,4 +10,9 @@ export const config = {
   avatarStorageDir: process.env.AVATAR_STORAGE_DIR ?? "./data/avatars",
   avatarMaxUploadBytes: Number(process.env.AVATAR_MAX_UPLOAD_BYTES ?? 8 * 1024 * 1024),
   frontendDistDir: process.env.FRONTEND_DIST_DIR ?? "../frontend/dist",
+  // Android apps allowed to use this host's passkeys — see asset-links.ts.
+  passkeyAndroidApps: (process.env.PASSKEY_ANDROID_APPS ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0),
 };
