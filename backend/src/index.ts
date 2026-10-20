@@ -303,7 +303,9 @@ async function handleRefresh(request: Request) {
   }
 
   const stored = await findRefreshTokenByJti(payload.jti);
-  if (!stored || stored.revoked_at !== null) {
+  // A rotated token may still be refreshed within the grace period, which
+  // claimRefreshToken enforces below; an explicitly revoked one may not.
+  if (!stored || (stored.revoked_at !== null && stored.rotated_at === null)) {
     audit(request, { event: "refresh", success: false, userId: stored?.user_id, username: payload.username, detail: "revoked or unknown token" });
     return new Response(JSON.stringify({ error: "Invalid or revoked refresh token" }), { status: 401, headers: withCorsHeaders(jsonHeaders) });
   }
@@ -339,9 +341,13 @@ async function handleRefresh(request: Request) {
     return new Response(JSON.stringify({ error: error.message }), { status: error.statusCode, headers: withCorsHeaders(jsonHeaders) });
   }
 
-  if (!(await claimRefreshToken(payload.jti))) {
+  const claim = await claimRefreshToken(payload.jti, config.refreshReuseGraceSeconds);
+  if (!claim) {
     audit(request, { event: "refresh", success: false, userId: user.id, username: user.username, detail: "token already rotated" });
     return new Response(JSON.stringify({ error: "Invalid or revoked refresh token" }), { status: 401, headers: withCorsHeaders(jsonHeaders) });
+  }
+  if (claim === "grace") {
+    audit(request, { event: "refresh", success: true, userId: user.id, username: user.username, detail: "reused within grace period" });
   }
   const accessToken = signAccessToken({ sub: payload.sub, username: user.username, role: user.role, scopes: user.scopes, audience });
   const refreshTokenMeta = signRefreshToken({ sub: payload.sub, username: user.username, app: payload.app });

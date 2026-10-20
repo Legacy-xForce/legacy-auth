@@ -73,6 +73,11 @@ export async function initDatabase() {
     `;
 
     await bootstrapSql`
+      ALTER TABLE refresh_tokens
+      ADD COLUMN IF NOT EXISTS rotated_at timestamptz;
+    `;
+
+    await bootstrapSql`
       CREATE TABLE IF NOT EXISTS passkey_credentials (
         id text PRIMARY KEY,
         user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -291,14 +296,14 @@ export async function saveRefreshToken(userId: string, jti: string, token: strin
   const result = await sql<RefreshTokenRecord[]>`
     INSERT INTO refresh_tokens (user_id, jti, token_hash, expires_at)
     VALUES (${userId}, ${jti}, ${tokenHash}, ${expiresAt.toISOString()})
-    RETURNING id, user_id, jti, token_hash, expires_at, revoked_at, created_at;
+    RETURNING id, user_id, jti, token_hash, expires_at, revoked_at, rotated_at, created_at;
   `;
   return result[0];
 }
 
 export async function findRefreshTokenByJti(jti: string): Promise<RefreshTokenRecord | null> {
   const result = await sql<RefreshTokenRecord[]>`
-    SELECT id, user_id, jti, token_hash, expires_at, revoked_at, created_at
+    SELECT id, user_id, jti, token_hash, expires_at, revoked_at, rotated_at, created_at
     FROM refresh_tokens
     WHERE jti = ${jti}
     LIMIT 1;
@@ -307,28 +312,38 @@ export async function findRefreshTokenByJti(jti: string): Promise<RefreshTokenRe
 }
 
 /**
- * Revokes a refresh token only if it is still live, and reports whether this
- * call was the one that revoked it. Rotation goes through here so two
- * concurrent refreshes with the same token cannot both succeed.
+ * Revokes a refresh token for rotation and says whether the caller may rotate
+ * it: `"first"` when this call revoked it, `"grace"` when it was rotated less
+ * than `graceSeconds` ago (parallel refreshes, or a retry after a lost
+ * response), `null` otherwise. Explicit revocations clear `rotated_at`, so the
+ * grace period never undoes a logout or password change.
  */
-export async function claimRefreshToken(jti: string): Promise<boolean> {
-  const result = await sql`
-    UPDATE refresh_tokens SET revoked_at = now()
+export async function claimRefreshToken(jti: string, graceSeconds: number): Promise<"first" | "grace" | null> {
+  const claimed = await sql`
+    UPDATE refresh_tokens SET revoked_at = now(), rotated_at = now()
     WHERE jti = ${jti} AND revoked_at IS NULL
     RETURNING id;
   `;
-  return result.length > 0;
+  if (claimed.length > 0) return "first";
+  const recent = await sql`
+    SELECT id FROM refresh_tokens
+    WHERE jti = ${jti}
+      AND rotated_at IS NOT NULL
+      AND rotated_at > now() - make_interval(secs => ${graceSeconds})
+    LIMIT 1;
+  `;
+  return recent.length > 0 ? "grace" : null;
 }
 
 export async function revokeRefreshToken(jti: string): Promise<void> {
   await sql`
-    UPDATE refresh_tokens SET revoked_at = now() WHERE jti = ${jti};
+    UPDATE refresh_tokens SET revoked_at = now(), rotated_at = NULL WHERE jti = ${jti};
   `;
 }
 
 export async function revokeAllRefreshTokensForUser(userId: string): Promise<void> {
   await sql`
-    UPDATE refresh_tokens SET revoked_at = now() WHERE user_id = ${userId};
+    UPDATE refresh_tokens SET revoked_at = now(), rotated_at = NULL WHERE user_id = ${userId};
   `;
 }
 

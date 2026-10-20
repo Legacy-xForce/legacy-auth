@@ -50,6 +50,7 @@ Optional environment variables:
 - `PORT` (default: `4000`)
 - `ACCESS_TOKEN_TTL_SECONDS` (default: `900`)
 - `REFRESH_TOKEN_TTL_SECONDS` (default: `2592000`)
+- `REFRESH_REUSE_GRACE_SECONDS` (default: `30`) - how long a rotated refresh token can still be refreshed (see [Refresh](#refresh))
 - `CACHE_TTL_MS` (default: `300000`)
 - `AVATAR_STORAGE_DIR` - directory where profile picture files are stored on disk, relative to `backend/` (default: `./data/avatars`)
 - `AVATAR_MAX_UPLOAD_BYTES` - maximum accepted profile picture upload size in bytes (default: `8388608`, i.e. 8 MiB)
@@ -167,7 +168,7 @@ Body:
 { "refresh_token": "..." }
 ```
 
-Each refresh token works once: refreshing revokes it and returns a new one. Scopes are re-read on every refresh, so a session opened for an app whose scope has since been removed gets `403` and is revoked.
+Refreshing revokes the refresh token and returns a new one. A rotated token can still be refreshed for `REFRESH_REUSE_GRACE_SECONDS` (default `30`), so a client that refreshes twice in parallel, or retries after losing the response, is not signed out; after that it gets `401`. Logout, password changes and disabling an account revoke tokens outright, and the grace period does not apply to them. Scopes are re-read on every refresh, so a session opened for an app whose scope has since been removed gets `403` and is revoked.
 
 Returns `403 Account disabled` if the refresh token belongs to an inactive user.
 
