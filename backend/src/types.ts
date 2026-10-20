@@ -29,6 +29,8 @@ export type RefreshTokenRecord = {
   token_hash: string;
   expires_at: string;
   revoked_at: string | null;
+  // Set when the token was revoked by rotation rather than explicitly.
+  rotated_at: string | null;
   created_at: string;
 };
 

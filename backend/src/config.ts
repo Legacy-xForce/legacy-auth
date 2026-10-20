@@ -8,6 +8,9 @@ export const config = {
   jwtIssuer: process.env.JWT_ISSUER ?? "https://auth.legacy-group.tech",
   accessTokenTtlSeconds: Number(process.env.ACCESS_TOKEN_TTL_SECONDS ?? 900),
   refreshTokenTtlSeconds: Number(process.env.REFRESH_TOKEN_TTL_SECONDS ?? 2592000),
+  // How long a rotated refresh token may still be refreshed, so parallel
+  // refreshes (or a retry after a lost response) don't sign the client out.
+  refreshReuseGraceSeconds: Number(process.env.REFRESH_REUSE_GRACE_SECONDS ?? 30),
   cacheTtlMs: Number(process.env.CACHE_TTL_MS ?? 300_000),
   avatarStorageDir: process.env.AVATAR_STORAGE_DIR ?? "./data/avatars",
   avatarMaxUploadBytes: Number(process.env.AVATAR_MAX_UPLOAD_BYTES ?? 8 * 1024 * 1024),
