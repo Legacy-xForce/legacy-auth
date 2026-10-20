@@ -2,7 +2,7 @@ import jwt from "jsonwebtoken";
 import { config } from "./config.ts";
 import { createHash, randomUUID } from "crypto";
 import { getPrivateKey, getPublicKey, getKid } from "./keys.ts";
-import { UserRole, UserScopes } from "./types.ts";
+import { APP_AUDIENCES, AppAudience, UserRole, UserScopes } from "./types.ts";
 
 export type AccessTokenPayload = {
   sub: string;
@@ -10,6 +10,8 @@ export type AccessTokenPayload = {
   role: UserRole;
   scopes: UserScopes;
   type: "access";
+  iss: string;
+  aud?: AppAudience[];
 };
 
 export type RefreshTokenPayload = {
@@ -17,9 +19,37 @@ export type RefreshTokenPayload = {
   username: string;
   jti: string;
   type: "refresh";
+  // The app the session was opened for; absent for sessions that cover every
+  // app the user may use.
+  app?: AppAudience;
 };
 
-export function signAccessToken(payload: { sub: string; username: string; role: UserRole; scopes: UserScopes }) {
+export class AudienceError extends Error {
+  constructor(message: string, readonly statusCode: 400 | 403) {
+    super(message);
+  }
+}
+
+/**
+ * The `aud` of an access token: the requested app, or every app the user's
+ * scopes allow when the client did not name one. Throws when the request
+ * names an unknown app or one the user may not use.
+ */
+export function resolveAudience(requested: unknown, scopes: UserScopes): AppAudience[] {
+  if (requested === undefined || requested === null) {
+    return APP_AUDIENCES.filter((app) => scopes[app]);
+  }
+  if (typeof requested !== "string" || !(APP_AUDIENCES as readonly string[]).includes(requested)) {
+    throw new AudienceError(`audience must be one of: ${APP_AUDIENCES.join(", ")}`, 400);
+  }
+  const app = requested as AppAudience;
+  if (!scopes[app]) {
+    throw new AudienceError(`Account has no access to ${app}`, 403);
+  }
+  return [app];
+}
+
+export function signAccessToken(payload: { sub: string; username: string; role: UserRole; scopes: UserScopes; audience: AppAudience[] }) {
   return jwt.sign(
     {
       sub: payload.sub,
@@ -33,11 +63,15 @@ export function signAccessToken(payload: { sub: string; username: string; role: 
       algorithm: "ES256",
       expiresIn: config.accessTokenTtlSeconds,
       keyid: getKid(),
+      issuer: config.jwtIssuer,
+      // A user with no app scopes still signs in to this service's console,
+      // but gets a token no app accepts.
+      ...(payload.audience.length > 0 ? { audience: payload.audience } : {}),
     }
   );
 }
 
-export function signRefreshToken(payload: { sub: string; username: string }) {
+export function signRefreshToken(payload: { sub: string; username: string; app?: AppAudience }) {
   const jti = randomUUID();
   return {
     token: jwt.sign(
@@ -46,6 +80,7 @@ export function signRefreshToken(payload: { sub: string; username: string }) {
         username: payload.username,
         jti,
         type: "refresh",
+        ...(payload.app ? { app: payload.app } : {}),
       },
       config.jwtSecret,
       {
@@ -58,7 +93,7 @@ export function signRefreshToken(payload: { sub: string; username: string }) {
 }
 
 export function verifyAccessToken(token: string): AccessTokenPayload {
-  return jwt.verify(token, getPublicKey()) as AccessTokenPayload;
+  return jwt.verify(token, getPublicKey(), { algorithms: ["ES256"] }) as AccessTokenPayload;
 }
 
 export function verifyRefreshToken(token: string): RefreshTokenPayload {

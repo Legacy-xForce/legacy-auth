@@ -46,9 +46,10 @@ export function createOpenApiDocument(): OpenApiDocument {
                 },
               },
             },
-            "400": { description: "Missing username or password" },
+            "400": { description: "Missing username or password, or unknown audience" },
             "401": { description: "Invalid credentials" },
-            "403": { description: "Account disabled" },
+            "403": { description: "Account disabled, or no access to the requested audience" },
+            "429": { description: "Too many failed attempts; see the Retry-After header" },
           },
         },
       },
@@ -77,6 +78,7 @@ export function createOpenApiDocument(): OpenApiDocument {
             "400": { description: "Missing current_password or new_password" },
             "401": { description: "Invalid access token or current password" },
             "403": { description: "Account disabled" },
+            "429": { description: "Too many failed attempts; see the Retry-After header" },
           },
         },
       },
@@ -104,6 +106,7 @@ export function createOpenApiDocument(): OpenApiDocument {
         post: {
           tags: ["Passkey"],
           summary: "Verify WebAuthn assertion and issue tokens",
+          description: "Body is the WebAuthn assertion (`id`, `rawId`, `response`) plus an optional `audience`, as for `/auth/login`.",
           requestBody: {
             required: true,
             content: {
@@ -121,8 +124,10 @@ export function createOpenApiDocument(): OpenApiDocument {
                 },
               },
             },
+            "400": { description: "Unknown audience" },
             "401": { description: "Invalid passkey signature or replay detected" },
-            "403": { description: "Account disabled" },
+            "403": { description: "Account disabled, or no access to the requested audience" },
+            "429": { description: "Too many failed attempts; see the Retry-After header" },
           },
         },
       },
@@ -154,6 +159,7 @@ export function createOpenApiDocument(): OpenApiDocument {
             "200": { description: "Credential registered successfully" },
             "400": { description: "Invalid credential payload" },
             "401": { description: "Unauthorized" },
+            "409": { description: "The credential id is registered to another account" },
           },
         },
       },
@@ -211,7 +217,7 @@ export function createOpenApiDocument(): OpenApiDocument {
             },
             "400": { description: "Missing refresh_token" },
             "401": { description: "Invalid, revoked, or expired refresh token" },
-            "403": { description: "Account disabled" },
+            "403": { description: "Account disabled, or no longer has access to the session's audience" },
           },
         },
       },
@@ -361,6 +367,12 @@ export function createOpenApiDocument(): OpenApiDocument {
           properties: {
             username: { type: "string", example: "alice" },
             password: { type: "string", example: "secret" },
+            audience: {
+              type: "string",
+              enum: ["calendar", "tracker"],
+              description:
+                "The app the session is for. The access token's `aud` is then just this app, and the request is refused when the user's scopes do not include it. Omitted, `aud` lists every app the user's scopes allow.",
+            },
           },
         },
         RefreshRequest: {

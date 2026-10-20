@@ -1,10 +1,11 @@
 import { serve } from "bun";
 import { config } from "./config.ts";
-import { createCorsPreflightResponse, withCorsHeaders } from "./cors.ts";
-import { initDatabase, findUserByUsername, findUserActiveByUsername, findUserById, saveRefreshToken, findRefreshTokenByJti, verifyRefreshTokenHash, revokeRefreshToken, revokeAllRefreshTokensForUser, updateUserPasswordHash, createUserWithActive, listUsersPaginated, updateUserProfile, updateUserScopes, deleteUserById } from "./db.ts";
+import { applyCorsOrigin, createCorsPreflightResponse, withCorsHeaders } from "./cors.ts";
+import { initDatabase, findUserByUsername, findUserActiveByUsername, findUserById, saveRefreshToken, findRefreshTokenByJti, verifyRefreshTokenHash, claimRefreshToken, revokeRefreshToken, revokeAllRefreshTokensForUser, updateUserPasswordHash, createUserWithActive, listUsersPaginated, updateUserProfile, updateUserScopes, deleteUserById, insertAuthEvent, AuthEvent } from "./db.ts";
 import { UserRecord, UserRole, UserScopes } from "./types.ts";
 import { getCachedUser, cacheUser, invalidateCachedUser } from "./cache.ts";
-import { signAccessToken, signRefreshToken, verifyAccessToken, verifyRefreshToken, getRefreshTokenExpiresAt } from "./jwt.ts";
+import { signAccessToken, signRefreshToken, verifyAccessToken, verifyRefreshToken, getRefreshTokenExpiresAt, resolveAudience, AudienceError } from "./jwt.ts";
+import { throttleKeys, retryAfterSeconds, recordFailure, clearUserFailures, isPrivateAddress } from "./throttle.ts";
 import { getJwks } from "./keys.ts";
 import { assetLinks } from "./asset-links.ts";
 import { createOpenApiDocument } from "./openapi.ts";
@@ -25,144 +26,190 @@ const openApiDocument = createOpenApiDocument();
 
 await initDatabase();
 
-serve({
+const server = serve({
   port: config.port,
-  fetch: async (request) => {
-    try {
-      const url = new URL(request.url);
-      if (request.method === "OPTIONS") {
-        return createCorsPreflightResponse(request);
-      }
-      if (request.method === "GET" && url.pathname === "/openapi.json") {
-        return new Response(JSON.stringify(openApiDocument), { status: 200, headers: withCorsHeaders(jsonHeaders) });
-      }
-      if (request.method === "GET" && url.pathname === "/docs") {
-        return createSwaggerUiResponse();
-      }
-      if (request.method === "GET" && url.pathname.startsWith("/docs/")) {
-        const asset = createSwaggerAssetResponse(url.pathname.slice("/docs/".length));
-        if (!asset) {
-          return new Response(JSON.stringify({ error: "Not found" }), { status: 404, headers: withCorsHeaders(jsonHeaders) });
-        }
-        return asset;
-      }
-      if (request.method === "POST" && url.pathname === "/auth/login") {
-        return await handleLogin(request);
-      }
-      if (request.method === "POST" && url.pathname === "/auth/refresh") {
-        return await handleRefresh(request);
-      }
-      if (request.method === "POST" && url.pathname === "/auth/logout") {
-        return await handleLogout(request);
-      }
-      if (request.method === "POST" && url.pathname === "/auth/change-password") {
-        return await handleChangePassword(request);
-      }
-      if (request.method === "POST" && url.pathname === "/auth/passkey/login-options") {
-        return await handlePasskeyLoginOptions(request);
-      }
-      if (request.method === "POST" && url.pathname === "/auth/passkey/login-verify") {
-        return await handlePasskeyLoginVerify(request);
-      }
-      if (request.method === "POST" && url.pathname === "/auth/passkey/register-options") {
-        return await handlePasskeyRegisterOptions(request);
-      }
-      if (request.method === "POST" && url.pathname === "/auth/passkey/register-verify") {
-        return await handlePasskeyRegisterVerify(request);
-      }
-      if (request.method === "GET" && url.pathname === "/auth/passkey/credentials") {
-        return await handlePasskeyListCredentials(request);
-      }
-      const passkeyCredentialMatch = url.pathname.match(/^\/auth\/passkey\/credentials\/([A-Za-z0-9_-]+)$/);
-      if (passkeyCredentialMatch && request.method === "DELETE") {
-        return await handlePasskeyDeleteCredential(request, passkeyCredentialMatch[1]);
-      }
-
-      if (request.method === "POST" && url.pathname === "/auth/profile-picture") {
-        return await handleUploadProfilePicture(request);
-      }
-      if (request.method === "GET" && url.pathname.startsWith("/auth/profile-picture/")) {
-        return await handleGetProfilePicture(url.pathname.slice("/auth/profile-picture/".length));
-      }
-      if (request.method === "GET" && url.pathname === "/.well-known/jwks.json") {
-        return new Response(JSON.stringify(getJwks()), { status: 200, headers: withCorsHeaders(jsonHeaders) });
-      }
-      if (request.method === "GET" && url.pathname === "/.well-known/assetlinks.json") {
-        const statements = assetLinks();
-        if (statements) {
-          return new Response(JSON.stringify(statements), { status: 200, headers: withCorsHeaders(jsonHeaders) });
-        }
-      }
-      if (request.method === "GET" && url.pathname === "/auth/me") {
-        return await handleGetMe(request);
-      }
-      if (request.method === "PATCH" && url.pathname === "/auth/me") {
-        return await handleUpdateMe(request);
-      }
-      if (request.method === "GET" && url.pathname === "/admin/users") {
-        return await handleListUsers(request, url);
-      }
-      if (request.method === "POST" && url.pathname === "/admin/users") {
-        return await handleCreateUser(request);
-      }
-      const userMatch = url.pathname.match(/^\/admin\/users\/([0-9a-f-]{36})$/i);
-      if (userMatch) {
-        if (request.method === "GET") {
-          return await handleGetUser(request, userMatch[1]);
-        }
-        if (request.method === "PATCH") {
-          return await handleUpdateUser(request, userMatch[1]);
-        }
-        if (request.method === "DELETE") {
-          return await handleDeleteUser(request, userMatch[1]);
-        }
-      }
-      const userAvatarMatch = url.pathname.match(/^\/admin\/users\/([0-9a-f-]{36})\/avatar$/i);
-      if (userAvatarMatch && request.method === "POST") {
-        return await handleUploadUserAvatar(request, userAvatarMatch[1]);
-      }
-      if (
-        request.method === "GET" &&
-        !url.pathname.startsWith("/auth/") &&
-        !url.pathname.startsWith("/admin/") &&
-        !url.pathname.startsWith("/.well-known/")
-      ) {
-        const staticResponse = await tryServeFrontend(url.pathname);
-        if (staticResponse) {
-          return staticResponse;
-        }
-      }
-      return new Response(JSON.stringify({ error: "Not found" }), { status: 404, headers: withCorsHeaders(jsonHeaders) });
-    } catch (error) {
-      console.error(error);
-      const message = error instanceof Error ? error.message : "Internal server error";
-      return new Response(JSON.stringify({ error: message }), { status: 500, headers: withCorsHeaders(jsonHeaders) });
-    }
-  },
+  fetch: async (request) => applyCorsOrigin(request, await route(request)),
 });
+
+async function route(request: Request): Promise<Response> {
+  try {
+    const url = new URL(request.url);
+    if (request.method === "OPTIONS") {
+      return createCorsPreflightResponse(request);
+    }
+    if (request.method === "GET" && url.pathname === "/openapi.json") {
+      return new Response(JSON.stringify(openApiDocument), { status: 200, headers: withCorsHeaders(jsonHeaders) });
+    }
+    if (request.method === "GET" && url.pathname === "/docs") {
+      return createSwaggerUiResponse();
+    }
+    if (request.method === "GET" && url.pathname.startsWith("/docs/")) {
+      const asset = createSwaggerAssetResponse(url.pathname.slice("/docs/".length));
+      if (!asset) {
+        return new Response(JSON.stringify({ error: "Not found" }), { status: 404, headers: withCorsHeaders(jsonHeaders) });
+      }
+      return asset;
+    }
+    if (request.method === "POST" && url.pathname === "/auth/login") {
+      return await handleLogin(request);
+    }
+    if (request.method === "POST" && url.pathname === "/auth/refresh") {
+      return await handleRefresh(request);
+    }
+    if (request.method === "POST" && url.pathname === "/auth/logout") {
+      return await handleLogout(request);
+    }
+    if (request.method === "POST" && url.pathname === "/auth/change-password") {
+      return await handleChangePassword(request);
+    }
+    if (request.method === "POST" && url.pathname === "/auth/passkey/login-options") {
+      return await handlePasskeyLoginOptions(request);
+    }
+    if (request.method === "POST" && url.pathname === "/auth/passkey/login-verify") {
+      return await handlePasskeyLoginVerify(request);
+    }
+    if (request.method === "POST" && url.pathname === "/auth/passkey/register-options") {
+      return await handlePasskeyRegisterOptions(request);
+    }
+    if (request.method === "POST" && url.pathname === "/auth/passkey/register-verify") {
+      return await handlePasskeyRegisterVerify(request);
+    }
+    if (request.method === "GET" && url.pathname === "/auth/passkey/credentials") {
+      return await handlePasskeyListCredentials(request);
+    }
+    const passkeyCredentialMatch = url.pathname.match(/^\/auth\/passkey\/credentials\/([A-Za-z0-9_-]+)$/);
+    if (passkeyCredentialMatch && request.method === "DELETE") {
+      return await handlePasskeyDeleteCredential(request, passkeyCredentialMatch[1]);
+    }
+
+    if (request.method === "POST" && url.pathname === "/auth/profile-picture") {
+      return await handleUploadProfilePicture(request);
+    }
+    if (request.method === "GET" && url.pathname.startsWith("/auth/profile-picture/")) {
+      return await handleGetProfilePicture(url.pathname.slice("/auth/profile-picture/".length));
+    }
+    if (request.method === "GET" && url.pathname === "/.well-known/jwks.json") {
+      return new Response(JSON.stringify(getJwks()), { status: 200, headers: withCorsHeaders(jsonHeaders) });
+    }
+    if (request.method === "GET" && url.pathname === "/.well-known/assetlinks.json") {
+      const statements = assetLinks();
+      if (statements) {
+        return new Response(JSON.stringify(statements), { status: 200, headers: withCorsHeaders(jsonHeaders) });
+      }
+    }
+    if (request.method === "GET" && url.pathname === "/auth/me") {
+      return await handleGetMe(request);
+    }
+    if (request.method === "PATCH" && url.pathname === "/auth/me") {
+      return await handleUpdateMe(request);
+    }
+    if (request.method === "GET" && url.pathname === "/admin/users") {
+      return await handleListUsers(request, url);
+    }
+    if (request.method === "POST" && url.pathname === "/admin/users") {
+      return await handleCreateUser(request);
+    }
+    const userMatch = url.pathname.match(/^\/admin\/users\/([0-9a-f-]{36})$/i);
+    if (userMatch) {
+      if (request.method === "GET") {
+        return await handleGetUser(request, userMatch[1]);
+      }
+      if (request.method === "PATCH") {
+        return await handleUpdateUser(request, userMatch[1]);
+      }
+      if (request.method === "DELETE") {
+        return await handleDeleteUser(request, userMatch[1]);
+      }
+    }
+    const userAvatarMatch = url.pathname.match(/^\/admin\/users\/([0-9a-f-]{36})\/avatar$/i);
+    if (userAvatarMatch && request.method === "POST") {
+      return await handleUploadUserAvatar(request, userAvatarMatch[1]);
+    }
+    if (
+      request.method === "GET" &&
+      !url.pathname.startsWith("/auth/") &&
+      !url.pathname.startsWith("/admin/") &&
+      !url.pathname.startsWith("/.well-known/")
+    ) {
+      const staticResponse = await tryServeFrontend(url.pathname);
+      if (staticResponse) {
+        return staticResponse;
+      }
+    }
+    return new Response(JSON.stringify({ error: "Not found" }), { status: 404, headers: withCorsHeaders(jsonHeaders) });
+  } catch (error) {
+    console.error(error);
+    const message = error instanceof Error ? error.message : "Internal server error";
+    return new Response(JSON.stringify({ error: message }), { status: 500, headers: withCorsHeaders(jsonHeaders) });
+  }
+}
 
 async function parseJson<T>(request: Request): Promise<T> {
   return await request.json() as T;
 }
 
+function clientIp(request: Request): string | null {
+  if (config.trustProxy) {
+    const forwarded = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
+    if (forwarded) return forwarded;
+  }
+  return server.requestIP(request)?.address ?? null;
+}
+
+/**
+ * The client address to count failed sign-ins against, or `null` when the
+ * socket address is a proxy's (see isPrivateAddress) and TRUST_PROXY is off.
+ */
+function throttleIp(request: Request): string | null {
+  const ip = clientIp(request);
+  if (config.trustProxy || !ip) return ip;
+  return isPrivateAddress(ip) ? null : ip;
+}
+
+/** Records an auth event without holding up or failing the request. */
+function audit(request: Request, entry: Omit<AuthEvent, "ip" | "userAgent">) {
+  insertAuthEvent({ ...entry, ip: clientIp(request), userAgent: request.headers.get("user-agent") }).catch((error) => {
+    console.error("[audit] failed to record auth event", error);
+  });
+}
+
+function tooManyAttempts(retryAfter: number) {
+  return new Response(JSON.stringify({ error: "Too many failed attempts, try again later" }), {
+    status: 429,
+    headers: withCorsHeaders({ ...jsonHeaders, "Retry-After": String(retryAfter) }),
+  });
+}
+
 async function handleLogin(request: Request) {
-  const body = await parseJson<{ username?: string; password?: string }>(request);
+  const body = await parseJson<{ username?: string; password?: string; audience?: string }>(request);
   const username = String(body.username ?? "").trim();
   const password = String(body.password ?? "");
   if (!username || !password) {
     return new Response(JSON.stringify({ error: "username and password are required" }), { status: 400, headers: withCorsHeaders(jsonHeaders) });
   }
 
+  const throttle = throttleKeys(throttleIp(request), username);
+  const retryAfter = retryAfterSeconds(throttle);
+  if (retryAfter !== null) {
+    audit(request, { event: "login", success: false, username, detail: "throttled" });
+    return tooManyAttempts(retryAfter);
+  }
+  const reject = (error: string, status: number, userId?: string) => {
+    recordFailure(throttle);
+    audit(request, { event: "login", success: false, userId, username, detail: error });
+    return new Response(JSON.stringify({ error }), { status, headers: withCorsHeaders(jsonHeaders) });
+  };
+
   let user = getCachedUser(username);
   if (user) {
     const status = await findUserActiveByUsername(username);
     if (!status) {
       invalidateCachedUser(username);
-      return new Response(JSON.stringify({ error: "Invalid credentials" }), { status: 401, headers: withCorsHeaders(jsonHeaders) });
+      return reject("Invalid credentials", 401);
     }
     if (!status.active) {
       invalidateCachedUser(username);
-      return new Response(JSON.stringify({ error: "Account disabled" }), { status: 403, headers: withCorsHeaders(jsonHeaders) });
+      return reject("Account disabled", 403, status.id);
     }
     user = {
       ...user,
@@ -171,10 +218,10 @@ async function handleLogin(request: Request) {
   } else {
     const record = await findUserByUsername(username);
     if (!record) {
-      return new Response(JSON.stringify({ error: "Invalid credentials" }), { status: 401, headers: withCorsHeaders(jsonHeaders) });
+      return reject("Invalid credentials", 401);
     }
     if (!record.active) {
-      return new Response(JSON.stringify({ error: "Account disabled" }), { status: 403, headers: withCorsHeaders(jsonHeaders) });
+      return reject("Account disabled", 403, record.id);
     }
     user = {
       id: record.id,
@@ -189,7 +236,17 @@ async function handleLogin(request: Request) {
 
   const validPassword = await Bun.password.verify(password, user.password_hash);
   if (!validPassword) {
-    return new Response(JSON.stringify({ error: "Invalid credentials" }), { status: 401, headers: withCorsHeaders(jsonHeaders) });
+    return reject("Invalid credentials", 401, user.id);
+  }
+  clearUserFailures(username);
+
+  let audience;
+  try {
+    audience = resolveAudience(body.audience, user.scopes);
+  } catch (error) {
+    if (!(error instanceof AudienceError)) throw error;
+    audit(request, { event: "login", success: false, userId: user.id, username, detail: error.message });
+    return new Response(JSON.stringify({ error: error.message }), { status: error.statusCode, headers: withCorsHeaders(jsonHeaders) });
   }
 
   if (user.password_hash.startsWith("$2")) {
@@ -208,9 +265,10 @@ async function handleLogin(request: Request) {
     }
   }
 
-  const accessToken = signAccessToken({ sub: user.id, username: user.username, role: user.role, scopes: user.scopes });
-  const refreshTokenMeta = signRefreshToken({ sub: user.id, username: user.username });
+  const accessToken = signAccessToken({ sub: user.id, username: user.username, role: user.role, scopes: user.scopes, audience });
+  const refreshTokenMeta = signRefreshToken({ sub: user.id, username: user.username, app: body.audience ? audience[0] : undefined });
   await saveRefreshToken(user.id, refreshTokenMeta.jti, refreshTokenMeta.token, getRefreshTokenExpiresAt());
+  audit(request, { event: "login", success: true, userId: user.id, username: user.username, detail: audience.join(",") || null });
 
   return new Response(JSON.stringify({
     access_token: accessToken,
@@ -236,6 +294,7 @@ async function handleRefresh(request: Request) {
 
   const stored = await findRefreshTokenByJti(payload.jti);
   if (!stored || stored.revoked_at !== null) {
+    audit(request, { event: "refresh", success: false, userId: stored?.user_id, username: payload.username, detail: "revoked or unknown token" });
     return new Response(JSON.stringify({ error: "Invalid or revoked refresh token" }), { status: 401, headers: withCorsHeaders(jsonHeaders) });
   }
   if (new Date(stored.expires_at).getTime() < Date.now()) {
@@ -258,9 +317,24 @@ async function handleRefresh(request: Request) {
     return new Response(JSON.stringify({ error: "Account disabled" }), { status: 403, headers: withCorsHeaders(jsonHeaders) });
   }
 
-  const accessToken = signAccessToken({ sub: payload.sub, username: payload.username, role: user.role, scopes: user.scopes });
-  const refreshTokenMeta = signRefreshToken({ sub: payload.sub, username: payload.username });
-  await revokeRefreshToken(payload.jti);
+  // Scopes are re-read on every refresh, so losing an app's scope ends the
+  // sessions opened for that app.
+  let audience;
+  try {
+    audience = resolveAudience(payload.app, user.scopes);
+  } catch (error) {
+    if (!(error instanceof AudienceError)) throw error;
+    await revokeRefreshToken(payload.jti);
+    audit(request, { event: "refresh", success: false, userId: user.id, username: user.username, detail: error.message });
+    return new Response(JSON.stringify({ error: error.message }), { status: error.statusCode, headers: withCorsHeaders(jsonHeaders) });
+  }
+
+  if (!(await claimRefreshToken(payload.jti))) {
+    audit(request, { event: "refresh", success: false, userId: user.id, username: user.username, detail: "token already rotated" });
+    return new Response(JSON.stringify({ error: "Invalid or revoked refresh token" }), { status: 401, headers: withCorsHeaders(jsonHeaders) });
+  }
+  const accessToken = signAccessToken({ sub: payload.sub, username: user.username, role: user.role, scopes: user.scopes, audience });
+  const refreshTokenMeta = signRefreshToken({ sub: payload.sub, username: user.username, app: payload.app });
   await saveRefreshToken(payload.sub, refreshTokenMeta.jti, refreshTokenMeta.token, getRefreshTokenExpiresAt());
 
   return new Response(JSON.stringify({
@@ -325,8 +399,16 @@ async function handleChangePassword(request: Request) {
     return new Response(JSON.stringify({ error: "Account disabled" }), { status: 403, headers: withCorsHeaders(jsonHeaders) });
   }
 
+  const throttle = throttleKeys(throttleIp(request), user.username);
+  const retryAfter = retryAfterSeconds(throttle);
+  if (retryAfter !== null) {
+    audit(request, { event: "password_change", success: false, userId: user.id, username: user.username, detail: "throttled" });
+    return tooManyAttempts(retryAfter);
+  }
   const validPassword = await Bun.password.verify(currentPassword, user.password_hash);
   if (!validPassword) {
+    recordFailure(throttle);
+    audit(request, { event: "password_change", success: false, userId: user.id, username: user.username, detail: "Current password is invalid" });
     return new Response(JSON.stringify({ error: "Current password is invalid" }), { status: 401, headers: withCorsHeaders(jsonHeaders) });
   }
 
@@ -338,6 +420,7 @@ async function handleChangePassword(request: Request) {
 
   await revokeAllRefreshTokensForUser(updatedUser.id);
   invalidateCachedUser(updatedUser.username);
+  audit(request, { event: "password_change", success: true, userId: updatedUser.id, username: updatedUser.username });
 
   return new Response(JSON.stringify({ success: true }), { status: 200, headers: withCorsHeaders(jsonHeaders) });
 }
@@ -351,11 +434,21 @@ async function handlePasskeyLoginOptions(request: Request) {
 
 async function handlePasskeyLoginVerify(request: Request) {
   const body = await parseJson<any>(request);
+  // No username here, so passkey attempts are throttled per client IP only.
+  const throttle = throttleKeys(throttleIp(request));
+  const retryAfter = retryAfterSeconds(throttle);
+  if (retryAfter !== null) {
+    audit(request, { event: "passkey_login", success: false, detail: "throttled" });
+    return tooManyAttempts(retryAfter);
+  }
   try {
     const result = await verifyLogin(body);
+    audit(request, { event: "passkey_login", success: true, userId: result.user.id, username: result.user.username });
     return new Response(JSON.stringify(result), { status: 200, headers: withCorsHeaders(jsonHeaders) });
   } catch (error: any) {
     const status = error.statusCode || 401;
+    if (status === 401) recordFailure(throttle);
+    audit(request, { event: "passkey_login", success: false, detail: error.message || "Passkey verification failed" });
     return new Response(JSON.stringify({ error: error.message || "Passkey verification failed" }), {
       status,
       headers: withCorsHeaders(jsonHeaders),
@@ -376,6 +469,7 @@ async function handlePasskeyRegisterVerify(request: Request) {
   const body = await parseJson<any>(request);
   try {
     const result = await verifyRegister(authResult.id, body);
+    audit(request, { event: "passkey_register", success: true, userId: authResult.id, username: authResult.username, detail: result.credentialId });
     return new Response(JSON.stringify(result), { status: 200, headers: withCorsHeaders(jsonHeaders) });
   } catch (error: any) {
     const status = error.statusCode || 400;
@@ -398,6 +492,7 @@ async function handlePasskeyDeleteCredential(request: Request, id: string) {
   if (authResult instanceof Response) return authResult;
   try {
     const result = await deleteCredential(id, authResult.id);
+    audit(request, { event: "passkey_delete", success: true, userId: authResult.id, username: authResult.username, detail: id });
     return new Response(JSON.stringify(result), { status: 200, headers: withCorsHeaders(jsonHeaders) });
   } catch (error: any) {
     const status = error.statusCode || 400;
@@ -549,6 +644,17 @@ function toPublicUser(user: UserRecord) {
   };
 }
 
+/** The fields an admin update touched, without the password itself. */
+function describeUserUpdate(body: { username?: string; role?: string; active?: boolean; password?: string; scopes?: { calendar?: boolean; tracker?: boolean } }) {
+  const parts: string[] = [];
+  if (body.username !== undefined) parts.push(`username=${String(body.username).trim()}`);
+  if (body.role !== undefined) parts.push(`role=${normalizeRole(body.role)}`);
+  if (body.active !== undefined) parts.push(`active=${Boolean(body.active)}`);
+  if (body.scopes !== undefined) parts.push(`scopes=calendar:${Boolean(body.scopes?.calendar)},tracker:${Boolean(body.scopes?.tracker)}`);
+  if (body.password) parts.push("password=changed");
+  return parts.join(" ") || null;
+}
+
 function normalizeRole(value: unknown): UserRole {
   return value === "admin" ? "admin" : "user";
 }
@@ -623,6 +729,7 @@ async function handleCreateUser(request: Request) {
 
   try {
     const user = await createUserWithActive(username, password, active, { role });
+    audit(request, { event: "admin_user_create", success: true, userId: user.id, username: user.username, actorId: auth.id, detail: `role=${role} active=${active}` });
     return new Response(JSON.stringify(toPublicUser(user)), { status: 201, headers: withCorsHeaders(jsonHeaders) });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to create user";
@@ -698,6 +805,14 @@ async function handleUpdateUser(request: Request, id: string) {
   }
   invalidateCachedUser(previousUsername);
   invalidateCachedUser(user.username);
+  audit(request, {
+    event: "admin_user_update",
+    success: true,
+    userId: user.id,
+    username: user.username,
+    actorId: auth.id,
+    detail: describeUserUpdate(body),
+  });
 
   return new Response(JSON.stringify(toPublicUser(user)), { status: 200, headers: withCorsHeaders(jsonHeaders) });
 }
@@ -718,6 +833,8 @@ async function handleDeleteUser(request: Request, id: string) {
   await deleteUserById(id);
   await deleteAvatar(id);
   invalidateCachedUser(target.username);
+  // The row is gone, so the id is kept only in the detail.
+  audit(request, { event: "admin_user_delete", success: true, username: target.username, actorId: auth.id, detail: id });
 
   return new Response(null, { status: 204, headers: withCorsHeaders({}) });
 }

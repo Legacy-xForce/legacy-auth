@@ -21,7 +21,8 @@ In production (see [Docker](#docker)), the backend serves the built frontend as 
 - `GET /auth/me` / `PATCH /auth/me` to read/update the authenticated user's own profile
 - `POST /auth/profile-picture` to upload a profile picture (resized to 256x256, JPEG-compressed; GIFs stay animated)
 - `GET /auth/profile-picture/:userId` to fetch a user's profile picture
-- Admin user management: list/create/update users, roles, active/locked status, and per-app scopes (see [Admin API](#admin-api))
+- Admin user management: list/create/update users, roles, active status, and per-app scopes (see [Admin API](#admin-api))
+- Failed sign-in throttling and an `auth_events` audit log (see [Throttling and audit log](#throttling-and-audit-log))
 - Swagger UI at `GET /docs`
 - OpenAPI spec at `GET /openapi.json`
 - JWT access tokens (ES256) + refresh tokens (HS256)
@@ -42,6 +43,10 @@ Required environment variables:
 Optional environment variables:
 
 - `JWT_KEY_ID` - override the `kid` claim in access tokens and the JWKS response. Defaults to the RFC 7638 SHA-256 thumbprint of the public key.
+- `JWT_ISSUER` - the `iss` claim of access tokens (default: `https://auth.legacy-group.tech`). Apps that accept these tokens must expect the same value.
+- `CORS_ALLOWED_ORIGINS` - comma-separated browser origins allowed to call the API (e.g. `https://calendar.legacy-group.tech,https://tracker.legacy-group.tech`). Unset, any origin is allowed and a warning is logged at startup. The console is served from this service's own origin and does not need to be listed.
+- `LOGIN_MAX_FAILURES` (default: `10`) and `LOGIN_FAILURE_WINDOW_SECONDS` (default: `900`) - failed sign-ins tolerated per username within the window (each client IP gets five times as many) before further attempts get `429`
+- `TRUST_PROXY` - set to `true` behind a reverse proxy so the client IP is read from `X-Forwarded-For`; otherwise the socket address is used
 - `PORT` (default: `4000`)
 - `ACCESS_TOKEN_TTL_SECONDS` (default: `900`)
 - `REFRESH_TOKEN_TTL_SECONDS` (default: `2592000`)
@@ -94,7 +99,7 @@ bun run user:set-active alice false
 bun run user:set-active alice true
 ```
 
-Disabling a user revokes all of their refresh tokens and clears the cached auth entry. Disabled users receive `403 Account disabled` from login and refresh attempts. Locked users (set via the admin API) receive `403 Account locked`.
+Disabling a user revokes all of their refresh tokens and clears the cached auth entry. Disabled users receive `403 Account disabled` from login and refresh attempts.
 
 Existing bcrypt password hashes remain valid during login because Bun automatically detects the stored hash format. When a bcrypt user logs in successfully, the service upgrades the stored hash to Argon2.
 
@@ -108,10 +113,12 @@ Changing a password requires the current password and a valid access token. Afte
 
 Body:
 ```json
-{ "username": "alice", "password": "secret" }
+{ "username": "alice", "password": "secret", "audience": "calendar" }
 ```
 
-Returns `403 Account disabled` if the user exists but is not active.
+`audience` is optional and names the app the session is for (`calendar` or `tracker`). With it, the access token's `aud` is just that app and the login is refused with `403` if the user's scopes do not include it; the refresh token remembers the app, so every refreshed token keeps the same `aud`. Without it, `aud` lists every app the user's scopes allow.
+
+Returns `403 Account disabled` if the user exists but is not active, and `429` with a `Retry-After` header after too many failed attempts (see [Throttling and audit log](#throttling-and-audit-log)).
 
 ### Access Token
 
@@ -134,6 +141,8 @@ Payload:
   "role": "admin",
   "scopes": { "calendar": true, "tracker": false },
   "type": "access",
+  "iss": "https://auth.legacy-group.tech",
+  "aud": ["calendar"],
   "iat": 1783774116,
   "exp": 1783775016
 }
@@ -143,6 +152,8 @@ Payload:
 - `role` — `"admin"` or `"user"`
 - `scopes` — the same `{ calendar, tracker }` object exposed by the [Admin API](#admin-api), snapshotted at the time the token was issued
 - `type` — always `"access"` (refresh tokens, which are separate HS256 JWTs, use `"refresh"` and add a `jti`)
+- `iss` — `JWT_ISSUER`
+- `aud` — the apps this token is for: the login's `audience`, or every app in `scopes` that is `true`. Omitted when that is none (an account that only uses this service's console). An app must reject tokens whose `aud` does not include it.
 - `iat` / `exp` — issued-at and expiry, in Unix seconds (`exp - iat` equals `ACCESS_TOKEN_TTL_SECONDS`)
 
 `role` and `scopes` reflect the user's state at login/refresh time — they are not updated until the token is refreshed, so a role or scope change made via the Admin API takes effect on the affected user's next token refresh (or next login), not immediately. Downstream apps can either trust these claims after verifying the token against the [JWKS](#jwks) key, or call the Admin API directly for up-to-the-second values.
@@ -155,6 +166,8 @@ Body:
 ```json
 { "refresh_token": "..." }
 ```
+
+Each refresh token works once: refreshing revokes it and returns a new one. Scopes are re-read on every refresh, so a session opened for an app whose scope has since been removed gets `403` and is revoked.
 
 Returns `403 Account disabled` if the refresh token belongs to an inactive user.
 
@@ -267,10 +280,18 @@ All endpoints below require `Authorization: Bearer <access_token>` for a user wi
 - `GET /admin/users?page=&pageSize=&q=&role=` — paginated user list. `q` matches username, `role` filters to `admin` or `user`.
 - `POST /admin/users` — create a user: `{ username, password, role?, active? }`.
 - `GET /admin/users/:id` — fetch a single user.
-- `PATCH /admin/users/:id` — update a user: any of `{ username, role, active, locked, password, scopes: { calendar, tracker } }`. Setting `password` revokes all of that user's refresh tokens. Setting `active: false` or `locked: true` also revokes all sessions.
+- `PATCH /admin/users/:id` — update a user: any of `{ username, role, active, password, scopes: { calendar, tracker } }`. Setting `password` revokes all of that user's refresh tokens. Setting `active: false` also revokes all sessions.
 - `POST /admin/users/:id/avatar` — `multipart/form-data` with a `file` field, same rules as `POST /auth/profile-picture` but on behalf of another user.
 
-Users carry a `role` (`admin` | `user`), an `active`/`locked` status, and a `scopes` object (`{ calendar, tracker }`) used to gate access to other internal apps — the auth service itself doesn't enforce scopes. Both `role` and `scopes` are embedded in the [access token](#access-token) at login/refresh time, so downstream apps can read them straight off the verified JWT instead of calling the admin API, at the cost of the values being only as fresh as the user's last token refresh.
+Users carry a `role` (`admin` | `user`), an `active` flag, and a `scopes` object (`{ calendar, tracker }`) used to gate access to other internal apps. The auth service puts only the apps a user has a scope for in the token's `aud`; each app must still check `aud` (or `scopes`) itself. Both `role` and `scopes` are embedded in the [access token](#access-token) at login/refresh time, so downstream apps can read them straight off the verified JWT instead of calling the admin API, at the cost of the values being only as fresh as the user's last token refresh.
+
+### Throttling and audit log
+
+Failed password and passkey sign-ins are counted per username and per client IP in memory (so they reset on restart). After `LOGIN_MAX_FAILURES` failures for a username within `LOGIN_FAILURE_WINDOW_SECONDS` (or five times that many from one IP), `/auth/login` and `/auth/change-password` answer `429` with `Retry-After` until the window ends. Passkey sign-in carries no username, so it is throttled per IP only. A successful sign-in clears its username's count.
+
+Per-IP counting needs the real client address. Behind a reverse proxy (or Docker's published port) the socket address is the proxy's, so set `TRUST_PROXY=true` there; without it, private and loopback socket addresses are not counted, and only the per-username limit applies.
+
+Sign-ins, failed refreshes, password changes, passkey registrations and deletions, and admin changes to users are written to the `auth_events` table (`event`, `success`, `user_id`, `username`, `actor_id` for admin actions, `ip`, `user_agent`, `detail`, `created_at`). Passwords and tokens are never recorded. Nothing prunes the table yet.
 
 ## Swagger
 
