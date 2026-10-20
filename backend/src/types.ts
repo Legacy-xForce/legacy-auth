@@ -5,6 +5,12 @@ export type UserScopes = {
   tracker: boolean;
 };
 
+// Apps that accept this service's access tokens. Each is both a key of
+// `UserScopes` and an `aud` value, so a token only names apps the user may use.
+export const APP_AUDIENCES = ["calendar", "tracker"] as const;
+
+export type AppAudience = (typeof APP_AUDIENCES)[number];
+
 export type UserRecord = {
   id: string;
   username: string;

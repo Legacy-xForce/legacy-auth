@@ -87,6 +87,31 @@ export async function initDatabase() {
       CREATE INDEX IF NOT EXISTS idx_passkey_credentials_user_id
       ON passkey_credentials(user_id);
     `;
+
+    await bootstrapSql`
+      CREATE TABLE IF NOT EXISTS auth_events (
+        id bigserial PRIMARY KEY,
+        event text NOT NULL,
+        success boolean NOT NULL,
+        user_id uuid REFERENCES users(id) ON DELETE SET NULL,
+        username text,
+        actor_id uuid REFERENCES users(id) ON DELETE SET NULL,
+        ip text,
+        user_agent text,
+        detail text,
+        created_at timestamptz NOT NULL DEFAULT now()
+      );
+    `;
+
+    await bootstrapSql`
+      CREATE INDEX IF NOT EXISTS idx_auth_events_created_at
+      ON auth_events(created_at);
+    `;
+
+    await bootstrapSql`
+      CREATE INDEX IF NOT EXISTS idx_auth_events_user_id
+      ON auth_events(user_id);
+    `;
   } finally {
     await bootstrapSql.close({ timeout: 0 });
   }
@@ -281,6 +306,20 @@ export async function findRefreshTokenByJti(jti: string): Promise<RefreshTokenRe
   return result[0] ?? null;
 }
 
+/**
+ * Revokes a refresh token only if it is still live, and reports whether this
+ * call was the one that revoked it. Rotation goes through here so two
+ * concurrent refreshes with the same token cannot both succeed.
+ */
+export async function claimRefreshToken(jti: string): Promise<boolean> {
+  const result = await sql`
+    UPDATE refresh_tokens SET revoked_at = now()
+    WHERE jti = ${jti} AND revoked_at IS NULL
+    RETURNING id;
+  `;
+  return result.length > 0;
+}
+
 export async function revokeRefreshToken(jti: string): Promise<void> {
   await sql`
     UPDATE refresh_tokens SET revoked_at = now() WHERE jti = ${jti};
@@ -301,22 +340,27 @@ export async function verifyRefreshTokenHash(token: string, tokenHash: string): 
   return hashToken(token) === tokenHash;
 }
 
+/**
+ * Stores a passkey, replacing the user's own credential with the same id.
+ * Returns `null` when the id belongs to another user: credential ids are not
+ * secret (login options list them), so a re-registration must never move one.
+ */
 export async function savePasskeyCredential(
   id: string,
   userId: string,
   publicKey: string,
   deviceName?: string
-): Promise<PasskeyCredentialRecord> {
+): Promise<PasskeyCredentialRecord | null> {
   const result = await sql<PasskeyCredentialRecord[]>`
     INSERT INTO passkey_credentials (id, user_id, public_key, device_name)
     VALUES (${id}, ${userId}, ${publicKey}, ${deviceName ?? null})
     ON CONFLICT (id) DO UPDATE
     SET public_key = EXCLUDED.public_key,
-        device_name = EXCLUDED.device_name,
-        user_id = EXCLUDED.user_id
+        device_name = EXCLUDED.device_name
+    WHERE passkey_credentials.user_id = EXCLUDED.user_id
     RETURNING id, user_id, public_key, counter, device_name, created_at;
   `;
-  return result[0];
+  return result[0] ?? null;
 }
 
 export async function findPasskeyCredentialWithUser(
@@ -396,3 +440,29 @@ export async function deletePasskeyCredential(id: string, userId: string): Promi
   return result.length > 0;
 }
 
+export type AuthEvent = {
+  event: string;
+  success: boolean;
+  userId?: string | null;
+  username?: string | null;
+  actorId?: string | null;
+  ip?: string | null;
+  userAgent?: string | null;
+  detail?: string | null;
+};
+
+export async function insertAuthEvent(entry: AuthEvent): Promise<void> {
+  await sql`
+    INSERT INTO auth_events (event, success, user_id, username, actor_id, ip, user_agent, detail)
+    VALUES (
+      ${entry.event},
+      ${entry.success},
+      ${entry.userId ?? null},
+      ${entry.username ?? null},
+      ${entry.actorId ?? null},
+      ${entry.ip ?? null},
+      ${entry.userAgent ?? null},
+      ${entry.detail ?? null}
+    );
+  `;
+}

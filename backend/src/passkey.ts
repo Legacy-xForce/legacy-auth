@@ -10,7 +10,7 @@ import {
   deletePasskeyCredential,
   saveRefreshToken,
 } from "./db.ts";
-import { signAccessToken, signRefreshToken, getRefreshTokenExpiresAt } from "./jwt.ts";
+import { signAccessToken, signRefreshToken, getRefreshTokenExpiresAt, resolveAudience } from "./jwt.ts";
 
 interface StoredChallenge {
   challenge: string;
@@ -69,6 +69,8 @@ export type PasskeyLoginVerifyPayload = {
     signature: string;
     userHandle?: string;
   };
+  // The app the session is for — see resolveAudience.
+  audience?: string;
 };
 
 export async function generateRegisterOptions(user: UserRecord) {
@@ -143,6 +145,11 @@ export async function verifyRegister(userId: string, dto: PasskeyRegisterVerifyP
   const deviceName = dto.deviceName?.trim() || "Biometric Passkey";
 
   const credential = await savePasskeyCredential(dto.id, userId, publicKey, deviceName);
+  if (!credential) {
+    const err = new Error("Passkey is already registered to another account");
+    (err as any).statusCode = 409;
+    throw err;
+  }
   return { success: true, credentialId: credential.id, deviceName: credential.device_name };
 }
 
@@ -205,6 +212,8 @@ export async function verifyLogin(dto: PasskeyLoginVerifyPayload) {
     (err as any).statusCode = 403;
     throw err;
   }
+  // Checked before the signature so a refused app costs no counter update.
+  const audience = resolveAudience(dto.audience, credential.user.scopes);
 
   let publicKey: crypto.KeyObject;
   try {
@@ -248,8 +257,9 @@ export async function verifyLogin(dto: PasskeyLoginVerifyPayload) {
     username: user.username,
     role: user.role,
     scopes: user.scopes,
+    audience,
   });
-  const refreshTokenMeta = signRefreshToken({ sub: user.id, username: user.username });
+  const refreshTokenMeta = signRefreshToken({ sub: user.id, username: user.username, app: dto.audience ? audience[0] : undefined });
   await saveRefreshToken(user.id, refreshTokenMeta.jti, refreshTokenMeta.token, getRefreshTokenExpiresAt());
 
   return {
