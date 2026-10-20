@@ -46,7 +46,7 @@ Optional environment variables:
 - `JWT_ISSUER` - the `iss` claim of access tokens (default: `https://auth.legacy-group.tech`). Apps that accept these tokens must expect the same value.
 - `CORS_ALLOWED_ORIGINS` - comma-separated browser origins allowed to call the API (e.g. `https://calendar.legacy-group.tech,https://tracker.legacy-group.tech`). Unset, any origin is allowed and a warning is logged at startup. The console is served from this service's own origin and does not need to be listed.
 - `LOGIN_MAX_FAILURES` (default: `10`) and `LOGIN_FAILURE_WINDOW_SECONDS` (default: `900`) - failed sign-ins tolerated per username within the window (each client IP gets five times as many) before further attempts get `429`
-- `TRUST_PROXY` - set to `true` behind a reverse proxy so the client IP is read from `X-Forwarded-For`; otherwise the socket address is used
+- `TRUST_PROXY` - set to `true` behind a reverse proxy (e.g. a Cloudflare Tunnel) so the client IP is read from `X-Forwarded-For`. The header is only believed when the connection comes from a private address, and the rightmost public entry is used, since entries to its left are whatever the client sent.
 - `PORT` (default: `4000`)
 - `ACCESS_TOKEN_TTL_SECONDS` (default: `900`)
 - `REFRESH_TOKEN_TTL_SECONDS` (default: `2592000`)
@@ -289,7 +289,7 @@ Users carry a `role` (`admin` | `user`), an `active` flag, and a `scopes` object
 
 Failed password and passkey sign-ins are counted per username and per client IP in memory (so they reset on restart). After `LOGIN_MAX_FAILURES` failures for a username within `LOGIN_FAILURE_WINDOW_SECONDS` (or five times that many from one IP), `/auth/login` and `/auth/change-password` answer `429` with `Retry-After` until the window ends. Passkey sign-in carries no username, so it is throttled per IP only. A successful sign-in clears its username's count.
 
-Per-IP counting needs the real client address. Behind a reverse proxy (or Docker's published port) the socket address is the proxy's, so set `TRUST_PROXY=true` there; without it, private and loopback socket addresses are not counted, and only the per-username limit applies.
+Per-IP counting needs the real client address. Behind a reverse proxy (or Docker's published port) the socket address is the proxy's, so set `TRUST_PROXY=true` there. Private and loopback addresses are never counted; when that is all that is known, only the per-username limit applies.
 
 Sign-ins, failed refreshes, password changes, passkey registrations and deletions, and admin changes to users are written to the `auth_events` table (`event`, `success`, `user_id`, `username`, `actor_id` for admin actions, `ip`, `user_agent`, `detail`, `created_at`). Passwords and tokens are never recorded. Nothing prunes the table yet.
 

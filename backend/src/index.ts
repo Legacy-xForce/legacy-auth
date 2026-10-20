@@ -149,21 +149,31 @@ async function parseJson<T>(request: Request): Promise<T> {
 }
 
 function clientIp(request: Request): string | null {
-  if (config.trustProxy) {
-    const forwarded = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
-    if (forwarded) return forwarded;
+  const peer = server.requestIP(request)?.address ?? null;
+  // Forwarded headers are believed only from a proxy on a private address: a
+  // client reaching the port directly could otherwise claim any IP.
+  if (config.trustProxy && peer && isPrivateAddress(peer)) {
+    // Each proxy appends what it saw, so the rightmost public entry comes from
+    // the outermost proxy (e.g. Cloudflare); anything left of it is whatever
+    // the client sent.
+    const forwarded = (request.headers.get("x-forwarded-for") ?? "")
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0);
+    for (let i = forwarded.length - 1; i >= 0; i--) {
+      if (!isPrivateAddress(forwarded[i])) return forwarded[i];
+    }
   }
-  return server.requestIP(request)?.address ?? null;
+  return peer;
 }
 
 /**
- * The client address to count failed sign-ins against, or `null` when the
- * socket address is a proxy's (see isPrivateAddress) and TRUST_PROXY is off.
+ * The client address to count failed sign-ins against, or `null` when all we
+ * know is a proxy's private address (see isPrivateAddress).
  */
 function throttleIp(request: Request): string | null {
   const ip = clientIp(request);
-  if (config.trustProxy || !ip) return ip;
-  return isPrivateAddress(ip) ? null : ip;
+  return ip && !isPrivateAddress(ip) ? ip : null;
 }
 
 /** Records an auth event without holding up or failing the request. */
