@@ -1,10 +1,11 @@
 import { SQL } from "bun";
 import { UserRecord, RefreshTokenRecord, PasskeyCredentialRecord, UserRole, UserScopes } from "./types.ts";
 import { config } from "./config.ts";
+import { initOidcSchema } from "./oidc/schema.ts";
 
 import { createHash } from "crypto";
 
-const sql = new SQL(config.dbUrl);
+export const sql = new SQL(config.dbUrl);
 
 const USER_COLUMNS = "id, username, password_hash, role, active, scopes, created_at, updated_at";
 
@@ -77,6 +78,19 @@ export async function initDatabase() {
       ADD COLUMN IF NOT EXISTS rotated_at timestamptz;
     `;
 
+    // A login starts a family; every refresh token rotated from it joins it, so a
+    // replayed token can take the whole chain down. Tokens from before this column
+    // have no family and count as their own (see revokeRefreshFamily).
+    await bootstrapSql`
+      ALTER TABLE refresh_tokens
+      ADD COLUMN IF NOT EXISTS family_id uuid;
+    `;
+
+    await bootstrapSql`
+      CREATE INDEX IF NOT EXISTS idx_refresh_tokens_family_id
+      ON refresh_tokens(family_id);
+    `;
+
     await bootstrapSql`
       CREATE TABLE IF NOT EXISTS passkey_credentials (
         id text PRIMARY KEY,
@@ -117,6 +131,8 @@ export async function initDatabase() {
       CREATE INDEX IF NOT EXISTS idx_auth_events_user_id
       ON auth_events(user_id);
     `;
+
+    await initOidcSchema(bootstrapSql);
   } finally {
     await bootstrapSql.close({ timeout: 0 });
   }
@@ -291,19 +307,23 @@ export async function deleteUserById(id: string): Promise<boolean> {
   return result.length > 0;
 }
 
-export async function saveRefreshToken(userId: string, jti: string, token: string, expiresAt: Date): Promise<RefreshTokenRecord> {
+/**
+ * Stores a refresh token. A login passes no `familyId` and starts a new family;
+ * a refresh passes the family of the token it rotates.
+ */
+export async function saveRefreshToken(userId: string, jti: string, token: string, expiresAt: Date, familyId?: string): Promise<RefreshTokenRecord> {
   const tokenHash = hashToken(token);
   const result = await sql<RefreshTokenRecord[]>`
-    INSERT INTO refresh_tokens (user_id, jti, token_hash, expires_at)
-    VALUES (${userId}, ${jti}, ${tokenHash}, ${expiresAt.toISOString()})
-    RETURNING id, user_id, jti, token_hash, expires_at, revoked_at, rotated_at, created_at;
+    INSERT INTO refresh_tokens (user_id, jti, token_hash, expires_at, family_id)
+    VALUES (${userId}, ${jti}, ${tokenHash}, ${expiresAt.toISOString()}, COALESCE(${familyId ?? null}::uuid, gen_random_uuid()))
+    RETURNING id, user_id, jti, token_hash, expires_at, revoked_at, rotated_at, family_id, created_at;
   `;
   return result[0];
 }
 
 export async function findRefreshTokenByJti(jti: string): Promise<RefreshTokenRecord | null> {
   const result = await sql<RefreshTokenRecord[]>`
-    SELECT id, user_id, jti, token_hash, expires_at, revoked_at, rotated_at, created_at
+    SELECT id, user_id, jti, token_hash, expires_at, revoked_at, rotated_at, family_id, created_at
     FROM refresh_tokens
     WHERE jti = ${jti}
     LIMIT 1;
@@ -333,6 +353,22 @@ export async function claimRefreshToken(jti: string, graceSeconds: number): Prom
     LIMIT 1;
   `;
   return recent.length > 0 ? "grace" : null;
+}
+
+/**
+ * Revokes every token of a family, the one in hand included, and clears
+ * `rotated_at` so the grace period cannot bring any of them back. Called when a
+ * token that was already rotated is presented again. Tokens from before
+ * families existed have no family, so their own id stands in for it.
+ */
+export async function revokeRefreshFamily(familyId: string): Promise<number> {
+  const result = await sql<{ id: string }[]>`
+    UPDATE refresh_tokens
+    SET revoked_at = COALESCE(revoked_at, now()), rotated_at = NULL
+    WHERE family_id = ${familyId} OR id = ${familyId}
+    RETURNING id;
+  `;
+  return result.length;
 }
 
 export async function revokeRefreshToken(jti: string): Promise<void> {
@@ -480,4 +516,78 @@ export async function insertAuthEvent(entry: AuthEvent): Promise<void> {
       ${entry.detail ?? null}
     );
   `;
+}
+
+export type AuthEventRow = {
+  id: string;
+  event: string;
+  success: boolean;
+  user_id: string | null;
+  username: string | null;
+  actor_id: string | null;
+  ip: string | null;
+  user_agent: string | null;
+  detail: string | null;
+  created_at: string;
+};
+
+export type AuthEventFilters = {
+  event?: string;
+  success?: boolean;
+  userId?: string;
+  username?: string;
+  since?: Date;
+  until?: Date;
+  page: number;
+  pageSize: number;
+};
+
+/** Newest first. Every filter is optional; all given filters must match. */
+export async function listAuthEvents(filters: AuthEventFilters): Promise<{ items: AuthEventRow[]; total: number }> {
+  const event = filters.event ?? null;
+  const success = filters.success ?? null;
+  const userId = filters.userId ?? null;
+  const username = filters.username?.toLowerCase() ?? null;
+  const since = filters.since?.toISOString() ?? null;
+  const until = filters.until?.toISOString() ?? null;
+  const offset = (filters.page - 1) * filters.pageSize;
+
+  const items = await sql<AuthEventRow[]>`
+    SELECT id::text AS id, event, success, user_id, username, actor_id, ip, user_agent, detail, created_at
+    FROM auth_events
+    WHERE (${event}::text IS NULL OR event = ${event})
+      AND (${success}::boolean IS NULL OR success = ${success})
+      AND (${userId}::uuid IS NULL OR user_id = ${userId})
+      AND (${username}::text IS NULL OR lower(username) = ${username})
+      AND (${since}::timestamptz IS NULL OR created_at >= ${since})
+      AND (${until}::timestamptz IS NULL OR created_at < ${until})
+    ORDER BY created_at DESC, id DESC
+    LIMIT ${filters.pageSize} OFFSET ${offset};
+  `;
+
+  const countResult = await sql<{ count: string }[]>`
+    SELECT COUNT(*)::text AS count
+    FROM auth_events
+    WHERE (${event}::text IS NULL OR event = ${event})
+      AND (${success}::boolean IS NULL OR success = ${success})
+      AND (${userId}::uuid IS NULL OR user_id = ${userId})
+      AND (${username}::text IS NULL OR lower(username) = ${username})
+      AND (${since}::timestamptz IS NULL OR created_at >= ${since})
+      AND (${until}::timestamptz IS NULL OR created_at < ${until});
+  `;
+
+  return { items, total: Number(countResult[0]?.count ?? 0) };
+}
+
+/** Deletes audit rows older than `retentionDays` and returns how many went. */
+export async function pruneAuthEvents(retentionDays: number): Promise<number> {
+  const result = await sql<{ removed: number }[]>`
+    WITH pruned AS (
+      DELETE FROM auth_events
+      WHERE created_at < now() - make_interval(days => ${retentionDays})
+      RETURNING 1
+    )
+    SELECT COUNT(*)::int AS removed FROM pruned;
+  `;
+  return result[0]?.removed ?? 0;
 }

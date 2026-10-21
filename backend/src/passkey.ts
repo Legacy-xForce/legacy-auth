@@ -1,6 +1,6 @@
 import * as crypto from "crypto";
 import { config } from "./config.ts";
-import { UserRecord } from "./types.ts";
+import { AppAudience, UserRecord } from "./types.ts";
 import {
   savePasskeyCredential,
   findPasskeyCredentialWithUser,
@@ -178,7 +178,13 @@ export async function generateLoginOptions(username?: string) {
   };
 }
 
-export async function verifyLogin(dto: PasskeyLoginVerifyPayload) {
+/**
+ * Verifies a WebAuthn assertion: the challenge, the credential and its owner,
+ * the signature, user presence and the signature counter. Returns the user it
+ * proves. `beforeSignature` runs once the user is known but before the
+ * signature is checked, so a refusal there costs no counter update.
+ */
+export async function verifyAssertion(dto: PasskeyLoginVerifyPayload, beforeSignature?: (user: UserRecord) => void): Promise<{ user: UserRecord }> {
   if (!dto || typeof dto !== "object" || !dto.id || !dto.response) {
     throw new Error("Invalid login payload");
   }
@@ -212,8 +218,7 @@ export async function verifyLogin(dto: PasskeyLoginVerifyPayload) {
     (err as any).statusCode = 403;
     throw err;
   }
-  // Checked before the signature so a refused app costs no counter update.
-  const audience = resolveAudience(dto.audience, credential.user.scopes);
+  beforeSignature?.(credential.user);
 
   let publicKey: crypto.KeyObject;
   try {
@@ -251,7 +256,15 @@ export async function verifyLogin(dto: PasskeyLoginVerifyPayload) {
   }
   await updatePasskeyCounter(credential.id, counter);
 
-  const user = credential.user;
+  return { user: credential.user };
+}
+
+export async function verifyLogin(dto: PasskeyLoginVerifyPayload) {
+  let audience: AppAudience[] = [];
+  const { user } = await verifyAssertion(dto, (known) => {
+    // Checked before the signature so a refused app costs no counter update.
+    audience = resolveAudience(dto.audience, known.scopes, { required: config.requireAudience });
+  });
   const accessToken = signAccessToken({
     sub: user.id,
     username: user.username,
