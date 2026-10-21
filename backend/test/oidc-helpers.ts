@@ -184,6 +184,19 @@ export class Browser {
     return { status: response.status, headers: response.headers, body: parsed };
   }
 
+  /** The JSON the sign-in page loads for an interaction. */
+  async interactionDetails(uid: string): Promise<{ status: number; body: any }> {
+    const response = await this.request(`${ISSUER_ORIGIN}/interaction/${uid}/details`);
+    return { status: response.status, body: await response.json().catch(() => null) };
+  }
+
+  /** Presses "Back" on the no-access page and follows on to the client. */
+  async leave(interaction: Interaction, client: TestClient): Promise<AuthorizeResult> {
+    const result = await this.interactionCall(interaction.uid, "abort", {});
+    if (result.status !== 200) throw new Error(`abort failed: ${result.status} ${JSON.stringify(result.body)}`);
+    return this.follow(new Response(null, { status: 303, headers: { location: result.body.redirect } }), client.redirect);
+  }
+
   /** The whole dance: authorize, sign in if asked to, and arrive at the redirect URI. */
   async flow(client: TestClient, user: Pick<TestUser, "username" | "password">, options: Parameters<Browser["authorize"]>[1]): Promise<AuthorizeResult> {
     let result = await this.authorize(client, options);

@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import jwt from "jsonwebtoken";
 import { config } from "../src/config.ts";
 import { getJwks } from "../src/keys.ts";
-import { call, createTestUser, decode, startApp, verifyWithJwks, type TestApp } from "./helpers.ts";
+import { call, createTestUser, decode, startApp, testSql, verifyWithJwks, type TestApp } from "./helpers.ts";
 import {
   Browser,
   ISSUER,
@@ -212,22 +212,90 @@ describe("tokens", () => {
 });
 
 describe("sign-in rules", () => {
-  test("a user without the app's scope is refused with access_denied, not given a token", async () => {
+  test("a user without the app's scope is shown the no-access page, not given a token", async () => {
     const user = await createTestUser({ scopes: { calendar: true, tracker: false } });
     const client = await registerClient();
     const { challenge } = pkce();
-    const result = await new Browser(app).flow(client, user, { resource: "urn:legacy:tracker", scope: "openid tracker.read offline_access", challenge });
-    expect(result.redirect?.searchParams.get("error")).toBe("access_denied");
-    expect(result.redirect?.searchParams.get("code")).toBeNull();
-    expect(result.redirect?.searchParams.get("error_description")).toContain("no access to tracker");
+    const browser = new Browser(app);
+    const result = await browser.flow(client, user, { resource: "urn:legacy:tracker", scope: "openid tracker.read offline_access", challenge });
+    expect(result.redirect).toBeUndefined();
+    expect(result.interaction).toBeDefined();
+    expect(result.response.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
+
+    const details = await browser.interactionDetails(result.interaction!.uid);
+    expect(details.status).toBe(200);
+    expect(details.body).toMatchObject({ prompt: "no_access", reason: "no_scope", username: user.username });
+
+    const left = await browser.leave(result.interaction!, client);
+    expect(left.redirect?.searchParams.get("error")).toBe("access_denied");
+    expect(left.redirect?.searchParams.get("code")).toBeNull();
+    expect(left.redirect?.searchParams.get("state")).toBe("state-1");
+    expect(left.redirect?.searchParams.get("error_description")).toContain("no access to tracker");
+  });
+
+  test("the refusal is audited each time the page is shown", async () => {
+    const user = await createTestUser({ scopes: { calendar: true, tracker: false } });
+    const client = await registerClient();
+    await new Browser(app).flow(client, user, { resource: "urn:legacy:tracker", scope: "openid tracker.read", challenge: pkce().challenge });
+    const rows = await testSql`SELECT detail FROM auth_events WHERE event = 'oidc.consent' AND success = false AND user_id = ${user.id}`;
+    expect(rows.length).toBe(1);
+    expect(rows[0].detail).toContain(client.id);
+  });
+
+  test("'Use another account' starts a fresh sign-in with the same request, and another user can get a code", async () => {
+    const outsider = await createTestUser({ scopes: { calendar: true, tracker: false } });
+    const member = await createTestUser({ scopes: both });
+    const client = await registerClient();
+    const { verifier, challenge } = pkce();
+    const browser = new Browser(app);
+    const refused = await browser.flow(client, outsider, { resource: "urn:legacy:tracker", scope: "openid tracker.read offline_access", challenge, state: "keep-me" });
+
+    const switched = await browser.interactionCall(refused.interaction!.uid, "switch-account", {});
+    expect(switched.status).toBe(200);
+    const target = new URL(switched.body.redirect, ISSUER);
+    expect(target.pathname).toBe("/authorize");
+    expect(target.searchParams.get("prompt")?.split(" ").sort()).toEqual(["consent", "login"]);
+    expect(target.searchParams.get("state")).toBe("keep-me");
+    expect(target.searchParams.get("resource")).toBe("urn:legacy:tracker");
+    expect(target.searchParams.get("code_challenge")).toBe(challenge);
+
+    const login = await browser.follow(new Response(null, { status: 303, headers: { location: switched.body.redirect } }), client.redirect);
+    expect(login.interaction).toBeDefined();
+    expect((await browser.interactionDetails(login.interaction!.uid)).body.prompt).toBe("login");
+
+    const signedIn = await browser.signIn(login.interaction!, member, client);
+    expect(signedIn.redirect?.searchParams.get("state")).toBe("keep-me");
+    const tokens = await redeem(app, client, signedIn.redirect!, verifier);
+    expect(tokens.status).toBe(200);
+  });
+
+  test("'Use another account' is refused on a plain login screen", async () => {
+    const client = await registerClient();
+    const browser = new Browser(app);
+    const result = await browser.authorize(client, { challenge: pkce().challenge });
+    const switched = await browser.interactionCall(result.interaction!.uid, "switch-account", {});
+    expect(switched.status).toBe(409);
+  });
+
+  test("prompt=none never shows the page: the app gets an error at its redirect URI", async () => {
+    const user = await createTestUser({ scopes: { calendar: true, tracker: false } });
+    const client = await registerClient();
+    const browser = new Browser(app);
+    await signInAndRedeem(app, browser, client, user);
+    const silent = await browser.authorize(client, { resource: "urn:legacy:tracker", scope: "openid tracker.read", challenge: pkce().challenge, prompt: "none" });
+    expect(silent.interaction).toBeUndefined();
+    expect(silent.redirect?.searchParams.get("error")).toBeString();
+    expect(silent.redirect?.searchParams.get("code")).toBeNull();
   });
 
   test("only admins get the admin scope", async () => {
     const plain = await createTestUser({ scopes: both });
     const admin = await createTestUser({ role: "admin" });
     const client = await registerClient({ allowed_scopes: ["openid", "profile", "admin", "offline_access"] });
-    const denied = await new Browser(app).flow(client, plain, { resource: null, scope: "openid admin", challenge: pkce().challenge });
-    expect(denied.redirect?.searchParams.get("error")).toBe("access_denied");
+    const browser = new Browser(app);
+    const denied = await browser.flow(client, plain, { resource: null, scope: "openid admin", challenge: pkce().challenge });
+    expect((await browser.interactionDetails(denied.interaction!.uid)).body).toMatchObject({ prompt: "no_access", reason: "admin" });
+    expect((await browser.leave(denied.interaction!, client)).redirect?.searchParams.get("error")).toBe("access_denied");
     const granted = await new Browser(app).flow(client, admin, { resource: null, scope: "openid admin", challenge: pkce().challenge });
     expect(granted.redirect?.searchParams.get("code")).toBeString();
   });

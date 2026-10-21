@@ -15,6 +15,9 @@ type Details = {
   prompt: string;
   client: { id: string | null; name: string | null };
   login_hint: string | null;
+  /** Set when prompt is "no_access": the signed-in account may not use this app. */
+  reason?: "disabled" | "admin" | "no_scope" | "unknown_resource";
+  username?: string | null;
 };
 
 class InteractionError extends Error {
@@ -35,6 +38,7 @@ const error = ref("");
 const loading = ref(false);
 const passkeyLoading = ref(false);
 const cancelling = ref(false);
+const switching = ref(false);
 
 /** A JSON call to this interaction. Same-origin, so the browser sends the interaction cookie and the Origin header the server checks. */
 async function call<T>(action: string, options: { method?: "GET" | "POST"; body?: unknown } = {}): Promise<T> {
@@ -111,6 +115,18 @@ async function onPasskey() {
   }
 }
 
+async function onSwitchAccount() {
+  error.value = "";
+  switching.value = true;
+  try {
+    const result = await call<{ redirect: string }>("switch-account");
+    proceed(result.redirect);
+  } catch (failure) {
+    error.value = explain(failure, "Unable to switch account.");
+    switching.value = false;
+  }
+}
+
 async function onCancel() {
   cancelling.value = true;
   try {
@@ -130,7 +146,10 @@ async function onCancel() {
         <Icon name="shield" :size="22" />
       </div>
       <h1 class="m-0 text-2xl font-bold">Legacy</h1>
-      <p v-if="details?.client.name" class="mt-1 text-sm text-text-muted" data-testid="client-name">
+      <p v-if="details?.prompt === 'no_access'" class="mt-1 text-sm text-text-muted" data-testid="client-name">
+        Access denied
+      </p>
+      <p v-else-if="details?.client.name" class="mt-1 text-sm text-text-muted" data-testid="client-name">
         Sign in to <strong class="font-semibold text-text">{{ details.client.name }}</strong>
       </p>
       <p v-else class="mt-1 text-sm text-text-muted">Sign in with your Legacy account</p>
@@ -139,6 +158,34 @@ async function onCancel() {
     <div v-if="expired" class="card flex w-full max-w-95 flex-col gap-3 p-7" data-testid="expired">
       <h2 class="m-0 text-base font-semibold">This sign-in link has expired</h2>
       <p class="m-0 text-sm text-text-muted">Go back to the app you came from and start signing in again.</p>
+    </div>
+
+    <div v-else-if="details?.prompt === 'no_access'" class="card flex w-full max-w-95 flex-col gap-4 p-7" data-testid="no-access">
+      <template v-if="details.reason === 'disabled'">
+        <h2 class="m-0 text-base font-semibold">This account is turned off</h2>
+        <p class="m-0 text-sm text-text-muted">Ask an administrator to turn it back on, or sign in with another account.</p>
+      </template>
+      <template v-else>
+        <h2 class="m-0 text-base font-semibold">No access to {{ details.client.name ?? "this app" }}</h2>
+        <p class="m-0 text-sm text-text-muted">
+          <template v-if="details.username">
+            You are signed in as <strong class="font-semibold text-text">{{ details.username }}</strong>, which has no access to
+            {{ details.client.name ?? "this app" }}.
+          </template>
+          <template v-else>Your account has no access to {{ details.client.name ?? "this app" }}.</template>
+          Ask an administrator for access, or sign in with another account.
+        </p>
+      </template>
+
+      <p v-if="error" class="m-0 text-[0.82rem] text-danger" role="alert" data-testid="error">{{ error }}</p>
+
+      <button type="button" class="btn btn-primary w-full py-3 text-[0.95rem]" :disabled="switching || cancelling" data-testid="switch-account" @click="onSwitchAccount">
+        <Icon name="user" :size="16" />
+        {{ switching ? "Redirecting…" : "Use another account" }}
+      </button>
+      <button type="button" class="btn btn-ghost w-full text-[0.85rem]" :disabled="switching || cancelling" data-testid="back" @click="onCancel">
+        Back to {{ details.client.name ?? "the app" }}
+      </button>
     </div>
 
     <form v-else class="card flex w-full max-w-95 flex-col gap-4.5 p-7" @submit.prevent="onSubmit">

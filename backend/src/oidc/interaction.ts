@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type Provider from "oidc-provider";
 import { config } from "../config.ts";
 import { findUserById } from "../db.ts";
+import type { UserRecord } from "../types.ts";
 import { generateLoginOptions, verifyAssertion } from "../passkey.ts";
 import { isPrivateAddress, recordFailure, retryAfterSeconds, throttleKeys } from "../throttle.ts";
 import { auditOidc } from "./audit.ts";
@@ -17,14 +18,18 @@ import { ADMIN_SCOPE, entitledResourceScopes, mayUseAdminScope, RESOURCE_SERVERS
  * The page itself is the console's Vue app (its /interaction/:uid route); this
  * file answers the page's JSON calls and finishes the interaction. Consent is
  * not a screen: every client is a first-party app, so a request is granted
- * automatically when the signed-in user may have what it asks for, and refused
- * with `access_denied` when not (the OP's version of `403`).
+ * automatically when the signed-in user may have what it asks for. When not,
+ * the page shows why (the OP's version of `403`) and offers another account;
+ * leaving it sends the app `access_denied`.
  */
 
 const UID = /^[\w-]{10,100}$/;
 const MAX_BODY_BYTES = 16 * 1024;
 
 type Details = Awaited<ReturnType<Provider["interactionDetails"]>>;
+type Grant = InstanceType<Provider["Grant"]>;
+type Refusal = { ok: false; reason: "disabled" | "admin" | "no_scope" | "unknown_resource"; description: string; user: UserRecord | null };
+type Evaluation = { ok: true; grant: Grant } | Refusal;
 
 function send(res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}) {
   res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store", pragma: "no-cache", ...headers });
@@ -117,11 +122,14 @@ export function createInteractionHandler(provider: Provider) {
     return provider.interactionResult(req, res, { error: "access_denied", error_description: description }, { mergeWithLastSubmission: false });
   }
 
-  /** Grants what the client asked for if the signed-in user may have it; otherwise returns the refusal's redirect. */
-  async function consent(req: IncomingMessage, res: ServerResponse, details: Details): Promise<string> {
+  /**
+   * Decides whether the signed-in user may have what the client asked for, without
+   * saving anything. A refusal carries the reason the no-access page shows.
+   */
+  async function evaluate(details: Details): Promise<Evaluation> {
     const accountId = details.session?.accountId;
     const user = accountId ? await findUserById(accountId) : null;
-    if (!user || !user.active) return refuse(req, res, "The account is not available");
+    if (!user || !user.active) return { ok: false, reason: "disabled", description: "The account is not available", user };
 
     const prompt = details.prompt.details as {
       missingOIDCScope?: string[];
@@ -129,12 +137,9 @@ export function createInteractionHandler(provider: Provider) {
       missingResourceScopes?: Record<string, string[]>;
     };
 
-    const deny = async (reason: string) => {
-      await auditOidc({ event: "oidc.consent", success: false, userId: user.id, detail: `${details.params.client_id}: ${reason}` });
-      return refuse(req, res, reason);
-    };
-
-    if (prompt.missingOIDCScope?.includes(ADMIN_SCOPE) && !mayUseAdminScope(user)) return deny("The admin scope requires an admin account");
+    if (prompt.missingOIDCScope?.includes(ADMIN_SCOPE) && !mayUseAdminScope(user)) {
+      return { ok: false, reason: "admin", description: "The admin scope requires an admin account", user };
+    }
 
     const clientId = String(details.params.client_id);
     const grant = details.grantId
@@ -146,14 +151,44 @@ export function createInteractionHandler(provider: Provider) {
 
     for (const [indicator, scopes] of Object.entries(prompt.missingResourceScopes ?? {})) {
       const resource = RESOURCE_SERVERS[indicator];
-      if (!resource) return deny("Unknown resource");
+      if (!resource) return { ok: false, reason: "unknown_resource", description: "Unknown resource", user };
       const entitled = entitledResourceScopes(user, resource);
-      if (scopes.some((scope) => !entitled.includes(scope))) return deny(`The account has no access to ${resource.audience}`);
+      if (scopes.some((scope) => !entitled.includes(scope))) {
+        return { ok: false, reason: "no_scope", description: `The account has no access to ${resource.audience}`, user };
+      }
       grant.addResourceScope(indicator, scopes.join(" "));
     }
 
-    const grantId = await grant.save();
-    return provider.interactionResult(req, res, { consent: { grantId } }, { mergeWithLastSubmission: true });
+    return { ok: true, grant };
+  }
+
+  const auditRefusal = (details: Details, refusal: Refusal) =>
+    auditOidc({ event: "oidc.consent", success: false, userId: refusal.user?.id, detail: `${details.params.client_id}: ${refusal.description}` });
+
+  /** Grants what the client asked for, or returns the refusal; the caller decides how to show a refusal. */
+  async function consent(req: IncomingMessage, res: ServerResponse, details: Details): Promise<{ redirect: string } | Refusal> {
+    const evaluation = await evaluate(details);
+    if (!evaluation.ok) return evaluation;
+    const grantId = await evaluation.grant.save();
+    return { redirect: await provider.interactionResult(req, res, { consent: { grantId } }, { mergeWithLastSubmission: true }) };
+  }
+
+  /**
+   * The authorization request again, asking for a fresh sign-in, so a user who is
+   * signed in with an account that has no access can switch to another one. The
+   * provider ends the current session when a different user signs in.
+   */
+  function reauthorizeUrl(details: Details): string {
+    const query = new URLSearchParams();
+    for (const [name, value] of Object.entries(details.params)) {
+      if (value === undefined || value === null || name === "prompt") continue;
+      for (const item of Array.isArray(value) ? value : [value]) query.append(name, String(item));
+    }
+    const prompts = new Set(String(details.params.prompt ?? "").split(" ").filter(Boolean));
+    prompts.delete("none");
+    prompts.add("login");
+    query.set("prompt", [...prompts].join(" "));
+    return `/authorize?${query}`;
   }
 
   /** Returns true when the request was one of ours. */
@@ -174,8 +209,15 @@ export function createInteractionHandler(provider: Provider) {
       if (details.prompt.name === "login") {
         await sendSpa(res);
       } else if (details.prompt.name === "consent") {
-        res.writeHead(303, { location: await consent(req, res, details), "cache-control": "no-store" });
-        res.end();
+        const result = await consent(req, res, details);
+        if ("redirect" in result) {
+          res.writeHead(303, { location: result.redirect, "cache-control": "no-store" });
+          res.end();
+        } else {
+          // Shown instead of bouncing the user back to the app: the page says why and offers another account.
+          await auditRefusal(details, result);
+          await sendSpa(res);
+        }
       } else {
         sendHtml(res, 400, errorPage({ error: "invalid_request", error_description: "Unsupported interaction" }), { "content-security-policy": STATIC_PAGE_CSP });
       }
@@ -186,16 +228,18 @@ export function createInteractionHandler(provider: Provider) {
       const details = await detailsFor(req, res, uid, false);
       if (!details) return true;
       const client = await (provider as any).Client.find(String(details.params.client_id));
+      const refusal = details.prompt.name === "consent" ? await evaluate(details) : null;
       send(res, 200, {
         uid,
-        prompt: details.prompt.name,
+        prompt: refusal && !refusal.ok ? "no_access" : details.prompt.name,
         client: { id: client?.clientId ?? null, name: client?.clientName ?? client?.clientId ?? null },
         login_hint: typeof details.params.login_hint === "string" ? details.params.login_hint : null,
+        ...(refusal && !refusal.ok ? { reason: refusal.reason, username: refusal.user?.username ?? null } : {}),
       });
       return true;
     }
 
-    if (method !== "POST" || !["login", "passkey/options", "passkey/verify", "abort"].includes(action)) {
+    if (method !== "POST" || !["login", "passkey/options", "passkey/verify", "abort", "switch-account"].includes(action)) {
       send(res, 404, { error: "Not found" });
       return true;
     }
@@ -214,7 +258,20 @@ export function createInteractionHandler(provider: Provider) {
     if (!details) return true;
 
     if (action === "abort") {
-      send(res, 200, { redirect: await refuse(req, res, "The user cancelled the sign-in") });
+      // From the no-access page, the app learns why; from the login form, that the user cancelled.
+      const refusal = details.prompt.name === "consent" ? await evaluate(details) : null;
+      const description = refusal && !refusal.ok ? refusal.description : "The user cancelled the sign-in";
+      send(res, 200, { redirect: await refuse(req, res, description) });
+      return true;
+    }
+
+    if (action === "switch-account") {
+      const refusal = details.prompt.name === "consent" ? await evaluate(details) : null;
+      if (!refusal || refusal.ok) {
+        send(res, 409, { error: "This interaction is not refusing the signed-in account" });
+        return true;
+      }
+      send(res, 200, { redirect: reauthorizeUrl(details) });
       return true;
     }
 

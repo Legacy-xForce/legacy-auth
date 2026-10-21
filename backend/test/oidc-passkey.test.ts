@@ -149,14 +149,17 @@ describe("signing in with a passkey at the OP", () => {
     expect((await browser.interactionCall(uid, "passkey/verify", authenticator.assertion(options.body.challenge))).status).toBe(403);
   });
 
-  test("a passkey of a user without the app's scope signs in but gets access_denied for that app", async () => {
+  test("a passkey of a user without the app's scope signs in but is shown the no-access page for that app", async () => {
     const { authenticator, client, browser, uid } = await withPasskey({ scopes: { calendar: false, tracker: true } });
     const options = await optionsFor(browser, uid);
     const verified = await browser.interactionCall(uid, "passkey/verify", authenticator.assertion(options.body.challenge));
     expect(verified.status).toBe(200);
     const flow = await browser.follow(new Response(null, { status: 303, headers: { location: verified.body.redirect } }), client.redirect);
-    expect(flow.redirect?.searchParams.get("error")).toBe("access_denied");
-    expect(flow.redirect?.searchParams.get("code")).toBeNull();
+    expect(flow.redirect).toBeUndefined();
+    expect((await browser.interactionDetails(flow.interaction!.uid)).body.prompt).toBe("no_access");
+    const left = await browser.leave(flow.interaction!, client);
+    expect(left.redirect?.searchParams.get("error")).toBe("access_denied");
+    expect(left.redirect?.searchParams.get("code")).toBeNull();
   });
 
   test("signing in at the OP issues no legacy refresh token", async () => {
