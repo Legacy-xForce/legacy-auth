@@ -31,6 +31,8 @@ export type RefreshTokenRecord = {
   revoked_at: string | null;
   // Set when the token was revoked by rotation rather than explicitly.
   rotated_at: string | null;
+  // Shared by every token rotated from one login; null for tokens from before families existed.
+  family_id: string | null;
   created_at: string;
 };
 

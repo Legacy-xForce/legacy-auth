@@ -40,10 +40,9 @@ export function applyCorsOrigin(request: Request, response: Response): Response 
 
 export function createCorsPreflightResponse(request: Request) {
   const requestedHeaders = request.headers.get("access-control-request-headers");
-  const headers = withCorsHeaders({
-    ...(requestedHeaders ? { "Access-Control-Allow-Headers": requestedHeaders } : {}),
-    "Access-Control-Max-Age": "86400",
-  });
+  const headers = withCorsHeaders({ "Access-Control-Max-Age": "86400" });
+  // Echoed rather than "*": a wildcard does not cover Authorization.
+  if (requestedHeaders) headers.set("Access-Control-Allow-Headers", requestedHeaders);
 
   return new Response(null, { status: 204, headers });
 }

@@ -34,9 +34,18 @@ export class AudienceError extends Error {
  * The `aud` of an access token: the requested app, or every app the user's
  * scopes allow when the client did not name one. Throws when the request
  * names an unknown app or one the user may not use.
+ *
+ * With `required`, a request that names no app is refused instead. That ends
+ * the cross-app replay window of a token whose `aud` lists every app, but it
+ * breaks clients that predate `audience`, so it is opt-in (REQUIRE_AUDIENCE).
+ * Refreshing a session that was opened without an app is never `required`:
+ * those sessions have no app to name and simply age out.
  */
-export function resolveAudience(requested: unknown, scopes: UserScopes): AppAudience[] {
+export function resolveAudience(requested: unknown, scopes: UserScopes, options: { required?: boolean } = {}): AppAudience[] {
   if (requested === undefined || requested === null) {
+    if (options.required) {
+      throw new AudienceError(`audience is required and must be one of: ${APP_AUDIENCES.join(", ")}`, 400);
+    }
     return APP_AUDIENCES.filter((app) => scopes[app]);
   }
   if (typeof requested !== "string" || !(APP_AUDIENCES as readonly string[]).includes(requested)) {

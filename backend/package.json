@@ -6,17 +6,20 @@
   "scripts": {
     "dev": "bun --watch src/index.ts",
     "start": "bun run src/index.ts",
+    "test": "bun test",
     "user:add": "bun run src/scripts/add-user.ts",
     "user:set-active": "bun run src/scripts/set-user-active.ts",
     "user:sync": "bun run src/scripts/sync-users.ts"
   },
   "devDependencies": {
     "@types/jsonwebtoken": "^9.0.10",
+    "@types/oidc-provider": "9.12.1",
     "bun-types": "^1.2.16"
   },
   "dependencies": {
     "@types/node": "^25.9.2",
     "jsonwebtoken": "^9.0.0",
+    "oidc-provider": "9.12.2",
     "sharp": "^0.35.3",
     "swagger-ui-dist": "^5.32.6"
   }

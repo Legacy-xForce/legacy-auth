@@ -11,6 +11,14 @@ const router = createRouter({
       meta: { public: true },
     },
     {
+      // Where the OpenID Provider sends a browser that has to sign in (see backend/src/oidc/interaction.ts).
+      path: "/interaction/:uid",
+      name: "interaction",
+      component: () => import("../views/InteractionView.vue"),
+      props: true,
+      meta: { public: true },
+    },
+    {
       path: "/",
       component: () => import("../views/console/ConsoleLayout.vue"),
       redirect: { name: "users" },

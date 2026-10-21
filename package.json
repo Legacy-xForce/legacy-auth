@@ -10,6 +10,7 @@
     "dev:frontend": "bun run --cwd frontend dev",
     "build:frontend": "bun run --cwd frontend build",
     "start": "bun run --cwd backend start",
+    "test": "bun run --cwd backend test",
     "user:add": "bun run --cwd backend user:add",
     "user:set-active": "bun run --cwd backend user:set-active"
   }
