@@ -140,7 +140,7 @@ export class Browser {
 
   async authorize(
     client: TestClient,
-    options: { scope?: string; resource?: string | null; challenge: string; prompt?: string | null; state?: string; nonce?: string; extra?: Record<string, string> }
+    options: { scope?: string; resource?: string | string[] | null; challenge: string; prompt?: string | null; state?: string; nonce?: string; extra?: Record<string, string> }
   ): Promise<AuthorizeResult> {
     const query = new URLSearchParams({
       client_id: client.id,
@@ -155,8 +155,9 @@ export class Browser {
     });
     // refresh tokens need prompt=consent (OIDC Core 11); the consent step is automatic, so users never see it
     if (options.prompt !== null) query.set("prompt", options.prompt ?? "consent");
-    const resource = options.resource === undefined ? "urn:legacy:calendar" : options.resource;
-    if (resource) query.set("resource", resource);
+    // several `resource` parameters ask for one grant that covers several apps (RFC 8707)
+    const resources = options.resource === undefined ? ["urn:legacy:calendar"] : [options.resource ?? []].flat();
+    for (const resource of resources) if (resource) query.append("resource", resource);
     return this.follow(await this.request(`${ISSUER_ORIGIN}/authorize?${query}`), client.redirect);
   }
 
@@ -198,19 +199,23 @@ export async function tokenRequest(app: TestApp, body: Record<string, string>, a
   return call(app, "POST", "/token", { form: body, headers: authorization ? { authorization } : {} });
 }
 
-/** Redeems the code at a redirect URI. */
-export async function redeem(app: TestApp, client: TestClient, redirect: URL, verifier: string): Promise<TokenResult> {
+/** Redeems the code at a redirect URI. `resource` picks the app the token is for when the grant covers more than one. */
+export async function redeem(app: TestApp, client: TestClient, redirect: URL, verifier: string, resource?: string): Promise<TokenResult> {
   const code = redirect.searchParams.get("code");
   if (!code) throw new Error(`no code in ${redirect}`);
   return tokenRequest(
     app,
-    { grant_type: "authorization_code", code, redirect_uri: client.redirect, code_verifier: verifier, ...(client.secret ? {} : { client_id: client.id }) },
+    { grant_type: "authorization_code", code, redirect_uri: client.redirect, code_verifier: verifier, ...(resource ? { resource } : {}), ...(client.secret ? {} : { client_id: client.id }) },
     client.secret ? basicAuth(client.id, client.secret) : undefined
   );
 }
 
-export const refreshRequest = (app: TestApp, client: TestClient, refreshToken: string) =>
-  tokenRequest(app, { grant_type: "refresh_token", refresh_token: refreshToken, ...(client.secret ? {} : { client_id: client.id }) }, client.secret ? basicAuth(client.id, client.secret) : undefined);
+export const refreshRequest = (app: TestApp, client: TestClient, refreshToken: string, resource?: string) =>
+  tokenRequest(
+    app,
+    { grant_type: "refresh_token", refresh_token: refreshToken, ...(resource ? { resource } : {}), ...(client.secret ? {} : { client_id: client.id }) },
+    client.secret ? basicAuth(client.id, client.secret) : undefined
+  );
 
 /** Signs in and returns the tokens of a first, complete flow. */
 export async function signInAndRedeem(
