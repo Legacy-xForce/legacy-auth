@@ -218,7 +218,7 @@ function formatDate(value: string) {
         </div>
         <div class="field">
           <label for="settings-username">Username</label>
-          <input id="settings-username" v-model="username" class="input min-w-0 flex-1" autocomplete="username" autocapitalize="none" spellcheck="false" />
+          <input id="settings-username" v-model="username" class="input" autocomplete="username" autocapitalize="none" spellcheck="false" />
           <p class="field-hint">Stored lowercase. You sign in to every Legacy app with this name.</p>
         </div>
         <FormAlert v-if="profileError">{{ profileError }}</FormAlert>
