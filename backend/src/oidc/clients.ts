@@ -2,7 +2,7 @@ import { createHash, randomBytes, timingSafeEqual } from "crypto";
 import { config } from "../config.ts";
 import { sql } from "../db.ts";
 import { internalTargetProblem } from "./net-safety.ts";
-import { ADMIN_SCOPE, SUPPORTED_SCOPES } from "./scopes.ts";
+import { ADMIN_SCOPE, RESOURCE_SERVERS, resourcesForScopes, SUPPORTED_SCOPES } from "./scopes.ts";
 
 export type OidcClientRow = {
   client_id: string;
@@ -14,6 +14,8 @@ export type OidcClientRow = {
   post_logout_redirect_uris: string[];
   backchannel_logout_uri: string | null;
   allowed_scopes: string[];
+  primary_resource: string | null;
+  default_resources: string[];
   is_public: boolean;
   disabled_at: string | null;
   created_at: string;
@@ -21,7 +23,7 @@ export type OidcClientRow = {
 };
 
 const COLUMNS = `client_id, client_secret_hash, previous_secret_hash, previous_secret_expires_at, name, redirect_uris,
-  post_logout_redirect_uris, backchannel_logout_uri, allowed_scopes, is_public, disabled_at, created_at, updated_at`;
+  post_logout_redirect_uris, backchannel_logout_uri, allowed_scopes, primary_resource, default_resources, is_public, disabled_at, created_at, updated_at`;
 
 // ---- secrets ------------------------------------------------------------
 
@@ -87,6 +89,13 @@ export type ClientFields = {
   post_logout_redirect_uris: string[];
   backchannel_logout_uri: string | null;
   allowed_scopes: string[];
+  /**
+   * The resource (`urn:legacy:<app>`) the client cannot work without. A user who may not have the others
+   * still signs in, without them. Null: every resource the client asks for is required.
+   */
+  primary_resource: string | null;
+  /** Resources a request is given when it asks for their scopes but names no `resource` (AppAuth cannot send two). */
+  default_resources: string[];
 };
 
 /**
@@ -110,7 +119,8 @@ export function validateClientFields(input: Record<string, unknown>, base?: Clie
 
   const backchannel = pick("backchannel_logout_uri") ?? null;
   if (backchannel !== null) {
-    if (isPublic) throw new ClientValidationError("a public client cannot receive back-channel logout");
+    // A public client (a browser app, a phone app) cannot receive it itself, but its own server can:
+    // the URI is called by this service, never by the client.
     const problem = redirectUriProblem(backchannel, false);
     if (problem) throw new ClientValidationError(`backchannel_logout_uri ${problem}`);
     // The server itself calls this URI, so it must not be able to aim at the local network.
@@ -128,6 +138,18 @@ export function validateClientFields(input: Record<string, unknown>, base?: Clie
   if (!scopes.includes("openid")) throw new ClientValidationError("allowed_scopes must include openid");
   if (new Set(scopes).size !== scopes.length) throw new ClientValidationError("allowed_scopes must not repeat a scope");
 
+  // Both name resources the client is registered for, so they cannot grant anything allowed_scopes does not.
+  const registered = resourcesForScopes(scopes as string[]);
+  const primary = pick("primary_resource") ?? null;
+  if (primary !== null && (typeof primary !== "string" || !registered.includes(primary))) {
+    throw new ClientValidationError("primary_resource must be a resource the client's allowed_scopes cover");
+  }
+  const defaults = pick("default_resources") ?? [];
+  if (!Array.isArray(defaults) || defaults.some((entry) => typeof entry !== "string" || !registered.includes(entry))) {
+    throw new ClientValidationError("default_resources must list resources the client's allowed_scopes cover");
+  }
+  if (new Set(defaults).size !== defaults.length) throw new ClientValidationError("default_resources must not repeat a resource");
+
   return {
     name: name.trim(),
     is_public: isPublic,
@@ -135,7 +157,14 @@ export function validateClientFields(input: Record<string, unknown>, base?: Clie
     post_logout_redirect_uris: postLogout,
     backchannel_logout_uri: backchannel as string | null,
     allowed_scopes: scopes as string[],
+    primary_resource: primary as string | null,
+    default_resources: defaults as string[],
   };
+}
+
+/** The resources whose absence ends a client's session: its primary one, or all it is registered for. */
+export function requiredResources(client: Pick<OidcClientRow, "primary_resource" | "allowed_scopes">): string[] {
+  return client.primary_resource ? [client.primary_resource] : resourcesForScopes(client.allowed_scopes);
 }
 
 // ---- storage ------------------------------------------------------------
@@ -163,7 +192,7 @@ export async function createClient(
   const secret = fields.is_public || options.withoutSecret ? null : generateClientSecret();
   const rows = await sql<OidcClientRow[]>`
     INSERT INTO oidc_clients (client_id, client_secret_hash, name, redirect_uris, post_logout_redirect_uris,
-                              backchannel_logout_uri, allowed_scopes, is_public, disabled_at)
+                              backchannel_logout_uri, allowed_scopes, primary_resource, default_resources, is_public, disabled_at)
     VALUES (
       ${clientId},
       ${secret ? hashClientSecret(secret) : null},
@@ -172,6 +201,8 @@ export async function createClient(
       ${sql.array(fields.post_logout_redirect_uris, "TEXT")},
       ${fields.backchannel_logout_uri},
       ${sql.array(fields.allowed_scopes, "TEXT")},
+      ${fields.primary_resource},
+      ${sql.array(fields.default_resources, "TEXT")},
       ${fields.is_public},
       ${options.disabled ? new Date().toISOString() : null}
     )
@@ -190,6 +221,8 @@ export async function updateClient(clientId: string, fields: ClientFields): Prom
         post_logout_redirect_uris = ${sql.array(fields.post_logout_redirect_uris, "TEXT")},
         backchannel_logout_uri = ${fields.backchannel_logout_uri},
         allowed_scopes = ${sql.array(fields.allowed_scopes, "TEXT")},
+        primary_resource = ${fields.primary_resource},
+        default_resources = ${sql.array(fields.default_resources, "TEXT")},
         updated_at = now()
     WHERE client_id = ${clientId}
     RETURNING ${sql.unsafe(COLUMNS)};
@@ -242,6 +275,8 @@ export function toPublicClient(row: OidcClientRow) {
     post_logout_redirect_uris: row.post_logout_redirect_uris,
     backchannel_logout_uri: row.backchannel_logout_uri,
     allowed_scopes: row.allowed_scopes,
+    primary_resource: row.primary_resource,
+    default_resources: row.default_resources,
     disabled: row.disabled_at !== null,
     has_secret: row.client_secret_hash !== null,
     previous_secret_expires_at:
@@ -255,8 +290,8 @@ export function toPublicClient(row: OidcClientRow) {
 
 // ---- what the provider library sees --------------------------------------
 
-/** The two non-standard properties the provider is told to keep (see provider.ts `extraClientMetadata`). */
-export const EXTRA_CLIENT_PROPERTIES = ["legacy_previous_secret_hash", "legacy_previous_secret_expires_at"];
+/** The non-standard properties the provider is told to keep (see provider.ts `extraClientMetadata`). */
+export const EXTRA_CLIENT_PROPERTIES = ["legacy_previous_secret_hash", "legacy_previous_secret_expires_at", "legacy_primary_resource", "legacy_default_resources"];
 
 const usesCustomScheme = (uri: string) => !/^https?:\/\//i.test(uri);
 
@@ -290,6 +325,8 @@ export async function findClientMetadata(clientId: string): Promise<Record<strin
     // and must show the browser instead. A web app, including one developed against http://localhost,
     // can.
     application_type: [...row.redirect_uris, ...row.post_logout_redirect_uris].some(usesCustomScheme) ? "native" : "web",
+    ...(row.primary_resource ? { legacy_primary_resource: row.primary_resource } : {}),
+    ...(row.default_resources.length > 0 ? { legacy_default_resources: row.default_resources } : {}),
     ...(row.is_public ? {} : { client_secret: row.client_secret_hash }),
     ...(previousStillValid
       ? {
@@ -314,15 +351,31 @@ function defaultClients(): { id: string; fields: ClientFields }[] {
     post_logout_redirect_uris: [`https://${host}/`],
     backchannel_logout_uri: `https://${host}/auth/backchannel-logout`,
     allowed_scopes: scopes,
+    primary_resource: null,
+    default_resources: [],
   });
+  const tracker = "urn:legacy:tracker";
+  const trackerScopes = ["openid", "profile", "tracker.read", "tracker.write", "calendar.read", "offline_access"];
   return [
     {
       id: "calendar-web",
       fields: { name: "Legacy Calendar", ...web("calendar.legacy-group.tech", ["openid", "profile", "calendar.read", "calendar.write", "offline_access"]) },
     },
+    // The tracker's web app is a public client that runs on several domains (see the tracker's
+    // docs/oidc-migration.md), so there is one redirect URI per domain. Its own server gets back-channel logout.
     {
-      id: "tracker-web",
-      fields: { name: "Legacy Tracker (web)", ...web("tracker.legacy-group.tech", ["openid", "profile", "tracker.read", "tracker.write", "offline_access"]) },
+      id: "tracker-spa",
+      fields: {
+        name: "Legacy Tracker (web)",
+        is_public: true,
+        redirect_uris: ["https://tracker.legacy-group.tech/callback", "https://legacytracker.pages.dev/callback", "http://localhost:5173/callback"],
+        post_logout_redirect_uris: ["https://tracker.legacy-group.tech/", "https://legacytracker.pages.dev/", "http://localhost:5173/"],
+        backchannel_logout_uri: "https://tracker.legacy-group.tech/auth/backchannel-logout",
+        allowed_scopes: trackerScopes,
+        // Events on the map need a calendar token, but a tracker user without a calendar must still sign in.
+        primary_resource: tracker,
+        default_resources: [tracker, "urn:legacy:calendar"],
+      },
     },
     {
       id: "tracker-mobile",
@@ -330,9 +383,11 @@ function defaultClients(): { id: string; fields: ClientFields }[] {
         name: "Legacy Tracker (mobile)",
         is_public: true,
         redirect_uris: ["com.legacy.legacytracker:/oauth2redirect"],
-        post_logout_redirect_uris: [],
-        backchannel_logout_uri: null,
-        allowed_scopes: ["openid", "profile", "tracker.read", "tracker.write", "offline_access"],
+        post_logout_redirect_uris: ["com.legacy.legacytracker:/logout"],
+        backchannel_logout_uri: "https://tracker.legacy-group.tech/auth/backchannel-logout",
+        allowed_scopes: trackerScopes,
+        primary_resource: tracker,
+        default_resources: [tracker, "urn:legacy:calendar"],
       },
     },
     {
@@ -344,6 +399,8 @@ function defaultClients(): { id: string; fields: ClientFields }[] {
         post_logout_redirect_uris: [`${issuerOrigin}/`],
         backchannel_logout_uri: `${issuerOrigin}/auth/backchannel-logout`,
         allowed_scopes: ["openid", "profile", ADMIN_SCOPE, "offline_access"],
+        primary_resource: null,
+        default_resources: [],
       },
     },
   ];

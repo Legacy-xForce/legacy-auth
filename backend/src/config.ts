@@ -42,6 +42,10 @@ export const config = {
   // A browser session ends after this long without activity, or this long after sign-in, whichever is first.
   oidcSessionIdleSeconds: Number(process.env.OIDC_SESSION_IDLE_SECONDS ?? 14 * 86400),
   oidcSessionAbsoluteSeconds: Number(process.env.OIDC_SESSION_ABSOLUTE_SECONDS ?? 30 * 86400),
+  // Native apps (a custom-scheme redirect) are not tied to the browser session. Their refresh token ends after
+  // this long unused, and their grant this long after sign-in, whatever else happens. Web clients keep REFRESH_TOKEN_TTL_SECONDS.
+  oidcNativeRefreshIdleSeconds: Number(process.env.OIDC_NATIVE_REFRESH_IDLE_SECONDS ?? 30 * 86400),
+  oidcNativeGrantSeconds: Number(process.env.OIDC_NATIVE_GRANT_SECONDS ?? 180 * 86400),
   // How long a client's previous secret keeps working after rotate-secret.
   oidcSecretRotationGraceSeconds: Number(process.env.OIDC_SECRET_ROTATION_GRACE_SECONDS ?? 86400),
   // Back-channel logout deliveries that fail are retried after these delays, then given up.

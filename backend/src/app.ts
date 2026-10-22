@@ -1,7 +1,7 @@
 import { config } from "./config.ts";
 import { applyCorsOrigin, createCorsPreflightResponse, withCorsHeaders } from "./cors.ts";
 import { findUserByUsername, findUserActiveByUsername, findUserById, saveRefreshToken, findRefreshTokenByJti, verifyRefreshTokenHash, claimRefreshToken, revokeRefreshFamily, revokeRefreshToken, revokeAllRefreshTokensForUser, updateUserPasswordHash, createUserWithActive, listUsersPaginated, updateUserProfile, updateUserScopes, deleteUserById, insertAuthEvent, listAuthEvents, AuthEvent } from "./db.ts";
-import { UserRecord, UserRole, UserScopes } from "./types.ts";
+import { APP_AUDIENCES, UserRecord, UserRole, UserScopes } from "./types.ts";
 import { getCachedUser, cacheUser, invalidateCachedUser } from "./cache.ts";
 import { signAccessToken, signRefreshToken, verifyAccessToken, verifyRefreshToken, getRefreshTokenExpiresAt, resolveAudience, AudienceError } from "./jwt.ts";
 import { throttleKeys, retryAfterSeconds, recordFailure, clearUserFailures, isPrivateAddress } from "./throttle.ts";
@@ -51,13 +51,16 @@ function markDeprecated(request: Request, response: Response): Response {
 }
 
 export async function handleRequest(request: Request): Promise<Response> {
-  return applyCorsOrigin(request, markDeprecated(request, await route(request)));
+  const response = markDeprecated(request, await route(request));
+  // The OP decides its own CORS per client (a public client may call /token from its redirect URIs' origins);
+  // the legacy allowlist, which only names the origins of the old login, must not overwrite or hide that.
+  return oidc.handles(new URL(request.url).pathname) ? response : applyCorsOrigin(request, response);
 }
 
 async function route(request: Request): Promise<Response> {
   try {
     const url = new URL(request.url);
-    if (request.method === "OPTIONS") {
+    if (request.method === "OPTIONS" && !oidc.handles(url.pathname)) {
       return createCorsPreflightResponse(request);
     }
     if (request.method === "GET" && url.pathname === "/openapi.json") {
@@ -887,8 +890,13 @@ async function handleUpdateUser(request: Request, id: string) {
 
     if (body.scopes !== undefined) {
       const scopes: UserScopes = { calendar: Boolean(body.scopes?.calendar), tracker: Boolean(body.scopes?.tracker) };
+      const before = user.scopes;
       const updated = await updateUserScopes(id, scopes);
       if (updated) user = updated;
+      // Losing an app signs the user out of the clients that cannot work without it.
+      for (const app of APP_AUDIENCES) {
+        if (before[app] && !scopes[app]) await oidc.endUserAppAccess(id, app);
+      }
     }
 
     if (body.password) {
