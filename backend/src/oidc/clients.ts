@@ -363,6 +363,21 @@ function defaultClients(): { id: string; fields: ClientFields }[] {
     },
     // The tracker's web app is a public client that runs on several domains (see the tracker's
     // docs/oidc-migration.md), so there is one redirect URI per domain. Its own server gets back-channel logout.
+    // The calendar's web app is a public client too: tokens live in the browser (access token in memory, refresh
+    // token in localStorage), the same as the tracker's. Calendar is its only app, so there is no primary resource.
+    {
+      id: "calendar-spa",
+      fields: {
+        name: "Legacy Calendar (web)",
+        is_public: true,
+        redirect_uris: ["https://legacy-calendar.pages.dev/callback", "https://calendar.legacy-group.tech/callback", "http://localhost:5173/callback"],
+        post_logout_redirect_uris: ["https://legacy-calendar.pages.dev/", "https://calendar.legacy-group.tech/", "http://localhost:5173/"],
+        backchannel_logout_uri: null,
+        allowed_scopes: ["openid", "profile", "calendar.read", "calendar.write", "offline_access"],
+        primary_resource: null,
+        default_resources: [],
+      },
+    },
     {
       id: "tracker-spa",
       fields: {
