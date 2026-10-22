@@ -412,7 +412,7 @@ describe("disabling a client", () => {
 });
 
 describe("the seeded clients", () => {
-  const seeded = ["calendar-web", "tracker-spa", "tracker-mobile", "auth-console"];
+  const seeded = ["calendar-web", "calendar-spa", "tracker-spa", "tracker-mobile", "auth-console"];
 
   test("exist, disabled, so deploying changes nothing for users", async () => {
     for (const id of seeded) {
@@ -426,6 +426,11 @@ describe("the seeded clients", () => {
     expect((await get("calendar-web")).body).toMatchObject({
       is_public: false,
       redirect_uris: ["https://calendar.legacy-group.tech/auth/callback"],
+      allowed_scopes: ["openid", "profile", "calendar.read", "calendar.write", "offline_access"],
+    });
+    expect((await get("calendar-spa")).body).toMatchObject({
+      is_public: true,
+      redirect_uris: ["https://legacy-calendar.pages.dev/callback", "https://calendar.legacy-group.tech/callback", "http://localhost:5173/callback"],
       allowed_scopes: ["openid", "profile", "calendar.read", "calendar.write", "offline_access"],
     });
     // the tracker's two clients share the calendar read scope, a main app and the defaults (legacy-auth#8)
