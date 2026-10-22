@@ -1,6 +1,7 @@
 import { config } from "../config.ts";
 import { startOidcBackend, type OidcBackend } from "./backend.ts";
-import { endUserSessions } from "./sessions.ts";
+import type { AppAudience } from "../types.ts";
+import { endUserAppAccess, endUserSessions } from "./sessions.ts";
 import { isOidcPath, proxyToOidc } from "./proxy.ts";
 
 type State = { status: "stopped" } | { status: "running"; backend: OidcBackend } | { status: "failed"; error: unknown };
@@ -62,5 +63,11 @@ export const oidc = {
   async endUserSessions(userId: string): Promise<number> {
     if (state.status !== "running") return 0;
     return endUserSessions(state.backend.provider, userId);
+  },
+
+  /** Ends the sign-ins of the apps that need `audience`, after a user lost it. A no-op while the OP is not running. */
+  async endUserAppAccess(userId: string, audience: AppAudience): Promise<number> {
+    if (state.status !== "running") return 0;
+    return endUserAppAccess(state.backend.provider, userId, audience);
   },
 };

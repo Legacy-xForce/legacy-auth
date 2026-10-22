@@ -170,11 +170,11 @@ describe("the token endpoint needs to be told which app", () => {
   });
 });
 
-// How the provider behaves today, written down because the apps have to be built around it. The
-// library rotates a refresh token *before* it works out which app the request is for and whether
-// the user may still have it, so a refresh that is refused leaves the client holding a spent
-// token, and presenting that again is refused too. If the provider ever checks first, these flip.
-describe("a refused refresh spends the refresh token", () => {
+// The library rotates a refresh token *before* it works out which app the request is for and whether
+// the user may still have it, so a refresh that is refused would leave the client holding a spent
+// token, and presenting that again would revoke the grant. The provider checks first instead
+// (`refuseBeforeRotating` in provider.ts): a refused request leaves the token as it was.
+describe("a refused refresh keeps the refresh token", () => {
   test("asking a grant for both apps for neither in particular", async () => {
     const client = await registerClient();
     const { tokens } = await signInForBoth(client);
@@ -183,8 +183,8 @@ describe("a refused refresh spends the refresh token", () => {
     expect(refused.body.error).toBe("invalid_target");
 
     const again = await refreshRequest(app, client, tokens.body.refresh_token, TRACKER);
-    expect(again.status).toBe(400);
-    expect(again.body.error).toBe("invalid_grant");
+    expect(again.status).toBe(200);
+    expect(claimsOf(again.body.access_token).aud).toBe("tracker");
   });
 
   test("asking a grant made for the tracker alone for the calendar", async () => {
@@ -198,8 +198,8 @@ describe("a refused refresh spends the refresh token", () => {
     expect(refused.body.error).toBe("invalid_target");
 
     const again = await refreshRequest(app, client, tokens.body.refresh_token, TRACKER);
-    expect(again.status).toBe(400);
-    expect(again.body.error).toBe("invalid_grant");
+    expect(again.status).toBe(200);
+    expect(claimsOf(again.body.access_token).aud).toBe("tracker");
   });
 
   test("losing the calendar scope: the tracker keeps refreshing until someone asks for a calendar token", async () => {

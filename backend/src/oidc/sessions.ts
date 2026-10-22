@@ -3,6 +3,9 @@ import type Provider from "oidc-provider";
 import { config } from "../config.ts";
 import { sql } from "../db.ts";
 import { enqueueBackchannelRetry } from "./backchannel.ts";
+import { getClient, requiredResources } from "./clients.ts";
+import { RESOURCE_SERVERS } from "./scopes.ts";
+import type { AppAudience } from "../types.ts";
 
 /**
  * Counts activity on a session: using one of its refresh tokens pushes the idle
@@ -78,6 +81,46 @@ export async function endUserSessions(provider: Provider, userId: string): Promi
     WHERE model IN ('Grant', 'RefreshToken', 'AccessToken', 'AuthorizationCode') AND payload->>'accountId' = ${userId};
   `;
   return sessions.length;
+}
+
+/**
+ * Tells the apps that cannot work without `audience` that a user lost access to it: back-channel logout (retried
+ * if it fails) and the grant is deleted, so no refresh token survives. The browser session stays, because the user
+ * is still signed in to the other apps. A client for which `audience` is only an optional extra (a tracker user
+ * losing the calendar) is left alone: its next refresh for that app is refused, and the rest keeps working.
+ * Returns how many grants it ended.
+ */
+export async function endUserAppAccess(provider: Provider, userId: string, audience: AppAudience): Promise<number> {
+  const indicator = Object.values(RESOURCE_SERVERS).find((resource) => resource.audience === audience)?.indicator;
+  if (!indicator) return 0;
+
+  const sessions = await sql<SessionRow[]>`
+    SELECT id, payload FROM oidc_sessions
+    WHERE user_id = ${userId} AND revoked_at IS NULL AND expires_at > now();
+  `;
+  let ended = 0;
+  for (const session of sessions) {
+    for (const [clientId, authorization] of Object.entries(session.payload.authorizations ?? {})) {
+      const row = await getClient(clientId);
+      if (!row || !requiredResources(row).includes(indicator)) continue;
+      const client = (await (provider as any).Client.find(clientId)) as
+        | { backchannelLogoutUri?: string; backchannelLogout(sub: string, sid: string): Promise<void> }
+        | undefined;
+      if (client?.backchannelLogoutUri && authorization.sid) {
+        try {
+          await client.backchannelLogout(userId, authorization.sid);
+        } catch (error) {
+          await enqueueBackchannelRetry(clientId, userId, authorization.sid, error);
+        }
+      }
+      if (authorization.grantId) {
+        await sql`DELETE FROM oidc_payloads WHERE grant_id = ${authorization.grantId};`;
+        await sql`DELETE FROM oidc_payloads WHERE model = 'Grant' AND id = ${hashId("Grant", authorization.grantId)};`;
+        ended += 1;
+      }
+    }
+  }
+  return ended;
 }
 
 /** Removes expired and long-revoked rows; the library never deletes them itself. */

@@ -19,6 +19,10 @@ import { ADMIN_SCOPE, entitledResourceScopes, mayUseAdminScope, RESOURCE_SERVERS
  * not a screen: every client is a first-party app, so a request is granted
  * automatically when the signed-in user may have what it asks for, and refused
  * with `access_denied` when not (the OP's version of `403`).
+ *
+ * A client can name a primary resource (clients.ts): it is the one app the sign-in
+ * is for. A user who may not have the client's other resources still signs in, and
+ * gets the primary app's grant without them. Without one, every app it asks for is required.
  */
 
 const UID = /^[\w-]{10,100}$/;
@@ -137,20 +141,47 @@ export function createInteractionHandler(provider: Provider) {
     if (prompt.missingOIDCScope?.includes(ADMIN_SCOPE) && !mayUseAdminScope(user)) return deny("The admin scope requires an admin account");
 
     const clientId = String(details.params.client_id);
-    const grant = details.grantId
-      ? ((await provider.Grant.find(details.grantId)) ?? new provider.Grant({ accountId: user.id, clientId }))
-      : new provider.Grant({ accountId: user.id, clientId });
+    const client = (await (provider as any).Client.find(clientId)) as { legacy_primary_resource?: string } | undefined;
+    if (!client) return deny("Unknown client");
+    const primary = client.legacy_primary_resource;
 
-    if (prompt.missingOIDCScope?.length) grant.addOIDCScope(prompt.missingOIDCScope.join(" "));
-    if (prompt.missingOIDCClaims?.length) grant.addOIDCClaims(prompt.missingOIDCClaims);
-
+    // Which of the requested apps the user may have. The others are left out of the request (and the grant)
+    // when they are optional for this client, and end the sign-in when they are not.
+    const left: string[] = [];
+    const granted: [string, string[]][] = [];
     for (const [indicator, scopes] of Object.entries(prompt.missingResourceScopes ?? {})) {
       const resource = RESOURCE_SERVERS[indicator];
       if (!resource) return deny("Unknown resource");
       const entitled = entitledResourceScopes(user, resource);
-      if (scopes.some((scope) => !entitled.includes(scope))) return deny(`The account has no access to ${resource.audience}`);
-      grant.addResourceScope(indicator, scopes.join(" "));
+      if (scopes.every((scope) => entitled.includes(scope))) {
+        granted.push([indicator, scopes]);
+      } else if (!primary || indicator === primary) {
+        return deny(`The account has no access to ${resource.audience}`);
+      } else {
+        left.push(indicator);
+      }
     }
+
+    if (left.length > 0) {
+      const omitted = new Set(left.flatMap((indicator) => RESOURCE_SERVERS[indicator].scopes));
+      const params = details.params as Record<string, unknown>;
+      const resources = (Array.isArray(params.resource) ? params.resource : [params.resource]).filter((entry) => typeof entry === "string") as string[];
+      const kept = resources.filter((indicator) => !left.includes(indicator));
+      if (kept.length === 0) return deny("The account has no access to any resource this sign-in asks for");
+      // The sign-in resumes with these parameters: it must not ask again for what was left out.
+      params.resource = kept.length === 1 ? kept[0] : kept;
+      params.scope = String(params.scope ?? "").split(" ").filter((scope) => !omitted.has(scope)).join(" ");
+      await (details as any).save((details as any).exp - Math.floor(Date.now() / 1000));
+      await auditOidc({ event: "oidc.consent", success: true, userId: user.id, detail: `${clientId}: signed in without ${left.join(", ")}` });
+    }
+
+    const grant = details.grantId
+      ? ((await provider.Grant.find(details.grantId)) ?? new provider.Grant({ accountId: user.id, client } as any))
+      : new provider.Grant({ accountId: user.id, client } as any);
+
+    if (prompt.missingOIDCScope?.length) grant.addOIDCScope(prompt.missingOIDCScope.join(" "));
+    if (prompt.missingOIDCClaims?.length) grant.addOIDCClaims(prompt.missingOIDCClaims);
+    for (const [indicator, scopes] of granted) grant.addResourceScope(indicator, scopes.join(" "));
 
     const grantId = await grant.save();
     return provider.interactionResult(req, res, { consent: { grantId } }, { mergeWithLastSubmission: true });

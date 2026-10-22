@@ -8,7 +8,7 @@ import { PostgresAdapter } from "./adapter.ts";
 import { EXTRA_CLIENT_PROPERTIES, secretMatchesHash } from "./clients.ts";
 import { assertPublicTarget } from "./net-safety.ts";
 import { errorPage, LOGOUT_CSP, logoutPage, signedOutPage, STATIC_PAGE_CSP } from "./pages.ts";
-import { RESOURCE_SERVERS, SUPPORTED_SCOPES } from "./scopes.ts";
+import { entitledResourceScopes, RESOURCE_SERVERS, resourcesForScopes, SUPPORTED_SCOPES } from "./scopes.ts";
 
 /** `acr` of a session signed in with a password or a passkey. Higher levels are reserved for step-up. */
 export const ACR_BASIC = "urn:legacy:loa:1";
@@ -31,6 +31,14 @@ function cookieKeys(): string[] {
 export const sessionCookieName = () => (config.jwtIssuer.startsWith("https://") ? "__Host-legacy_session" : "legacy_session");
 
 const clientScopes = (client: { scope?: string }) => new Set((client.scope ?? "").split(" ").filter(Boolean));
+
+/** The registry settings the provider keeps on a client (see clients.ts `EXTRA_CLIENT_PROPERTIES`). */
+type LegacyClient = { legacy_primary_resource?: string; legacy_default_resources?: string[]; applicationType?: string };
+
+/** Native apps (a custom-scheme redirect, see clients.ts) are not tied to the browser session. */
+const isNative = (client?: LegacyClient) => client?.applicationType === "native";
+
+const asList = (value: unknown): string[] => (Array.isArray(value) ? value.map(String) : typeof value === "string" ? [value] : []);
 
 export function createProvider(): Provider {
   const privateJwk = { ...getPrivateKey().export({ format: "jwk" }), use: "sig", alg: "ES256", kid: getKid() };
@@ -76,17 +84,26 @@ export function createProvider(): Provider {
       AccessToken: config.accessTokenTtlSeconds,
       AuthorizationCode: 60,
       IdToken: 600,
-      RefreshToken: config.refreshTokenTtlSeconds,
-      Grant: config.refreshTokenTtlSeconds,
+      // Rotation gives every refresh token a fresh lifetime, so for a native app this is "unused for"; the grant
+      // (set once, when it is created at consent) is what bounds the whole sign-in. A web client's grant
+      // ends with its first refresh token, which in turn ends with its browser session (below).
+      RefreshToken: (_ctx: unknown, _token: unknown, client?: LegacyClient) =>
+        isNative(client) ? config.oidcNativeRefreshIdleSeconds : config.refreshTokenTtlSeconds,
+      Grant: (_ctx: unknown, _grant: unknown, client?: LegacyClient) =>
+        isNative(client) ? config.oidcNativeGrantSeconds : config.refreshTokenTtlSeconds,
       Interaction: 600,
       Session: (_ctx, session) => sessionTtlSeconds(session as { loginTs?: number }),
     },
     interactions: { url: (_ctx, interaction) => `/interaction/${interaction.uid}` },
-    // Every refresh issues a new token; presenting an old one revokes the whole grant.
-    rotateRefreshToken: true,
+    // Every refresh issues a new token; presenting an old one revokes the whole grant (rotateRefreshToken below).
     // A refresh token ends with the browser session it came from, so logging out ends it too
-    // (the default keeps offline_access tokens alive after logout).
-    expiresWithSession: async () => true,
+    // (the default keeps offline_access tokens alive after logout). A native app is the exception: its
+    // sign-in goes through the phone's browser, so tying it to that session would sign the app out
+    // whenever the user signs out of another app there, or after 14 idle days. It ends instead with the
+    // app's own sign-out (revocation), losing access, disabling, or the lifetimes above.
+    expiresWithSession: async (ctx: { oidc: { client?: LegacyClient } }) => !isNative(ctx.oidc.client),
+    // Refresh tokens rotate; a refused refresh must not spend the token (see refuseBeforeRotating).
+    rotateRefreshToken: refuseBeforeRotating,
     extraClientMetadata: {
       properties: EXTRA_CLIENT_PROPERTIES,
       validator() {},
@@ -134,7 +151,21 @@ export function createProvider(): Provider {
       backchannelLogout: { enabled: true },
       resourceIndicators: {
         enabled: true,
-        defaultResource: async (_ctx, _client, oneOf) => oneOf ?? undefined,
+        defaultResource: async (ctx, client, oneOf) => {
+          const { legacy_primary_resource: primary, legacy_default_resources: defaults } = client as LegacyClient;
+          if (oneOf) {
+            // A code or refresh token that covers several apps, redeemed without saying which: the client's
+            // main app is not a guess. Any other client has to name one.
+            const several = asList(oneOf);
+            return primary && several.includes(primary) ? primary : oneOf;
+          }
+          // The authorization request named no resource. AppAuth can only send a map of parameters, so it cannot
+          // send two; a client that registered defaults gets them, limited to the apps whose scopes it asked for.
+          const asked = String((ctx.oidc?.params?.scope as string | undefined) ?? "").split(" ");
+          const implied = new Set(resourcesForScopes(asked));
+          const chosen = asList(defaults).filter((indicator) => implied.has(indicator));
+          return chosen.length > 0 ? chosen : undefined;
+        },
         useGrantedResource: async () => true,
         getResourceServerInfo: async (_ctx, indicator, client) => {
           const resource = RESOURCE_SERVERS[indicator];
@@ -168,6 +199,43 @@ export function createProvider(): Provider {
   patchSessionIds(provider);
   strictAuthorizationRequests(provider);
   return provider;
+}
+
+/**
+ * Called right before a refresh token is used up and replaced. The library spends the token first and only then
+ * works out the access token, so a refresh that fails after that (a resource the user cannot have, one the grant
+ * does not cover) leaves the client holding a token that is gone, and its next refresh is taken for theft and
+ * revokes the whole grant. The client cannot know in advance what it may ask for, so those requests are refused
+ * here, while the token is still good.
+ *
+ * Losing the app the sign-in is for (the primary one, or all of them) is not refused here: that ends the session
+ * anyway, and the library says so with `invalid_grant`.
+ */
+async function refuseBeforeRotating(ctx: any): Promise<boolean> {
+  const token = ctx.oidc?.entities?.RefreshToken;
+  if (!token) return true;
+
+  const granted = asList(token.resource);
+  const primary = (ctx.oidc.client as LegacyClient).legacy_primary_resource;
+  const requested = asList(ctx.oidc?.params?.resource);
+
+  // Naming nothing, or several, only works for a grant of one app or a client with a main app.
+  if (requested.length > 1) throw new errors.InvalidTarget("only a single resource indicator value must be requested during a refresh");
+  if (requested.length === 0) {
+    if (granted.length > 1 && !(primary && granted.includes(primary))) throw new errors.InvalidTarget("name the resource to refresh for");
+    return true;
+  }
+
+  const [indicator] = requested;
+  if (!granted.includes(indicator)) throw new errors.InvalidTarget("the grant does not cover this resource");
+  const resource = RESOURCE_SERVERS[indicator];
+  const user = await findUserById(String(token.accountId));
+  // Without a main app every app the client is registered for is required: losing one ends the session (invalid_grant).
+  const required = primary ? [primary] : resourcesForScopes([...clientScopes(ctx.oidc.client as { scope?: string })]);
+  if (user && resource && !required.includes(indicator) && entitledResourceScopes(user, resource).length === 0) {
+    throw new errors.InvalidTarget(`the account has no access to ${resource.audience}`);
+  }
+  return true;
 }
 
 /**

@@ -33,6 +33,8 @@ export async function registerClient(
     post_logout_redirect_uris: overrides.post_logout_redirect_uris ?? (isPublic ? [] : [`https://${id}.test.local/`]),
     backchannel_logout_uri: overrides.backchannel_logout_uri ?? null,
     allowed_scopes: overrides.allowed_scopes ?? ["openid", "profile", "calendar.read", "calendar.write", "tracker.read", "tracker.write", "offline_access"],
+    primary_resource: overrides.primary_resource ?? null,
+    default_resources: overrides.default_resources ?? [],
   });
   const { client, secret } = await createClient(id, fields, { disabled: overrides.disabled });
   return { id: client.client_id, secret, redirect, logoutRedirect: fields.post_logout_redirect_uris[0] ?? null };

@@ -191,8 +191,29 @@ describe("validation", () => {
     await refuses({ allowed_scopes: ["openid", "openid"] }, /repeat/);
   });
 
-  test("a public client cannot be given a back-channel endpoint", async () => {
-    await refuses({ is_public: true, redirect_uris: ["com.example.app:/cb"], post_logout_redirect_uris: [], backchannel_logout_uri: "https://app.example.test/bc" }, /public client/);
+  test("a public client can be given a back-channel endpoint: its own server receives it", async () => {
+    const created = await create(base({ is_public: true, redirect_uris: ["com.example.app:/cb"], post_logout_redirect_uris: [], backchannel_logout_uri: "https://app.example.test/bc" }));
+    expect(created.status).toBe(201);
+    expect(created.body.client.backchannel_logout_uri).toBe("https://app.example.test/bc");
+  });
+
+  test("the primary resource and the defaults must be apps the client is registered for", async () => {
+    await refuses({ primary_resource: "urn:legacy:tracker" }, /primary_resource/);
+    await refuses({ primary_resource: "calendar" }, /primary_resource/);
+    await refuses({ default_resources: ["urn:legacy:tracker"] }, /default_resources/);
+    await refuses({ default_resources: ["urn:legacy:calendar", "urn:legacy:calendar"] }, /default_resources/);
+    const created = await create(base({ primary_resource: "urn:legacy:calendar", default_resources: ["urn:legacy:calendar"] }));
+    expect(created.status).toBe(201);
+    expect(created.body.client).toMatchObject({ primary_resource: "urn:legacy:calendar", default_resources: ["urn:legacy:calendar"] });
+  });
+
+  test("the primary resource and the defaults can be changed, and cleared", async () => {
+    const id = newId();
+    await create(base({ client_id: id, allowed_scopes: ["openid", "calendar.read", "tracker.read"] }));
+    const set = await call(app, "PATCH", `/admin/oidc/clients/${id}`, { token: adminToken, json: { primary_resource: "urn:legacy:tracker", default_resources: ["urn:legacy:tracker", "urn:legacy:calendar"] } });
+    expect(set.body).toMatchObject({ primary_resource: "urn:legacy:tracker", default_resources: ["urn:legacy:tracker", "urn:legacy:calendar"] });
+    const cleared = await call(app, "PATCH", `/admin/oidc/clients/${id}`, { token: adminToken, json: { primary_resource: null, default_resources: [] } });
+    expect(cleared.body).toMatchObject({ primary_resource: null, default_resources: [] });
   });
 
   test("in production settings a back-channel endpoint may not point at the local network", async () => {
@@ -391,7 +412,7 @@ describe("disabling a client", () => {
 });
 
 describe("the seeded clients", () => {
-  const seeded = ["calendar-web", "tracker-web", "tracker-mobile", "auth-console"];
+  const seeded = ["calendar-web", "tracker-spa", "tracker-mobile", "auth-console"];
 
   test("exist, disabled, so deploying changes nothing for users", async () => {
     for (const id of seeded) {
@@ -407,15 +428,24 @@ describe("the seeded clients", () => {
       redirect_uris: ["https://calendar.legacy-group.tech/auth/callback"],
       allowed_scopes: ["openid", "profile", "calendar.read", "calendar.write", "offline_access"],
     });
-    expect((await get("tracker-web")).body).toMatchObject({
-      is_public: false,
-      redirect_uris: ["https://tracker.legacy-group.tech/auth/callback"],
-      allowed_scopes: ["openid", "profile", "tracker.read", "tracker.write", "offline_access"],
+    // the tracker's two clients share the calendar read scope, a main app and the defaults (legacy-auth#8)
+    const trackerScopes = ["openid", "profile", "tracker.read", "tracker.write", "calendar.read", "offline_access"];
+    const trackerResources = { primary_resource: "urn:legacy:tracker", default_resources: ["urn:legacy:tracker", "urn:legacy:calendar"] };
+    expect((await get("tracker-spa")).body).toMatchObject({
+      is_public: true,
+      redirect_uris: ["https://tracker.legacy-group.tech/callback", "https://legacytracker.pages.dev/callback", "http://localhost:5173/callback"],
+      post_logout_redirect_uris: ["https://tracker.legacy-group.tech/", "https://legacytracker.pages.dev/", "http://localhost:5173/"],
+      backchannel_logout_uri: "https://tracker.legacy-group.tech/auth/backchannel-logout",
+      allowed_scopes: trackerScopes,
+      ...trackerResources,
     });
     expect((await get("tracker-mobile")).body).toMatchObject({
       is_public: true,
       redirect_uris: ["com.legacy.legacytracker:/oauth2redirect"],
-      allowed_scopes: ["openid", "profile", "tracker.read", "tracker.write", "offline_access"],
+      post_logout_redirect_uris: ["com.legacy.legacytracker:/logout"],
+      backchannel_logout_uri: "https://tracker.legacy-group.tech/auth/backchannel-logout",
+      allowed_scopes: trackerScopes,
+      ...trackerResources,
     });
     expect((await get("auth-console")).body).toMatchObject({
       is_public: false,
@@ -425,8 +455,8 @@ describe("the seeded clients", () => {
   });
 
   test("confidential ones have no secret until an admin rotates one in", async () => {
-    for (const id of ["calendar-web", "tracker-web", "auth-console"]) expect((await get(id)).body.has_secret).toBe(false);
-    expect((await get("tracker-mobile")).body.has_secret).toBe(false);
+    for (const id of ["calendar-web", "auth-console"]) expect((await get(id)).body.has_secret).toBe(false);
+    for (const id of ["tracker-spa", "tracker-mobile"]) expect((await get(id)).body.has_secret).toBe(false);
   });
 
   test("cannot be enabled without a secret, and can afterwards", async () => {
@@ -443,24 +473,24 @@ describe("the seeded clients", () => {
   });
 
   test("a confidential client that was never given a secret is unknown to the provider, not open to anyone", async () => {
-    await testSql`UPDATE oidc_clients SET disabled_at = NULL WHERE client_id = 'tracker-web'`;
+    await testSql`UPDATE oidc_clients SET disabled_at = NULL WHERE client_id = 'auth-console'`;
     try {
-      const response = await new Browser(app).request(`${ISSUER_ORIGIN}/authorize?${new URLSearchParams({ client_id: "tracker-web", redirect_uri: "https://tracker.legacy-group.tech/auth/callback", response_type: "code", scope: "openid", nonce: "n", code_challenge: pkce().challenge, code_challenge_method: "S256" })}`);
+      const response = await new Browser(app).request(`${ISSUER_ORIGIN}/authorize?${new URLSearchParams({ client_id: "auth-console", redirect_uri: `${ISSUER_ORIGIN}/auth/callback`, response_type: "code", scope: "openid", nonce: "n", code_challenge: pkce().challenge, code_challenge_method: "S256" })}`);
       expect(response.status).toBe(400);
-      const token = await tokenRequest(app, { grant_type: "authorization_code", code: "x" }, basicAuth("tracker-web", ""));
+      const token = await tokenRequest(app, { grant_type: "authorization_code", code: "x" }, basicAuth("auth-console", ""));
       expect([400, 401]).toContain(token.status);
     } finally {
-      await testSql`UPDATE oidc_clients SET disabled_at = now() WHERE client_id = 'tracker-web'`;
+      await testSql`UPDATE oidc_clients SET disabled_at = now() WHERE client_id = 'auth-console'`;
     }
   });
 
   test("seeding again adds nothing and never overwrites an edited client", async () => {
-    await call(app, "PATCH", "/admin/oidc/clients/tracker-web", { token: adminToken, json: { name: "Edited by an admin" } });
+    await call(app, "PATCH", "/admin/oidc/clients/tracker-spa", { token: adminToken, json: { name: "Edited by an admin" } });
     try {
       expect(await ensureDefaultClients()).toEqual([]);
-      expect((await get("tracker-web")).body.name).toBe("Edited by an admin");
+      expect((await get("tracker-spa")).body.name).toBe("Edited by an admin");
     } finally {
-      await call(app, "PATCH", "/admin/oidc/clients/tracker-web", { token: adminToken, json: { name: "Legacy Tracker (web)" } });
+      await call(app, "PATCH", "/admin/oidc/clients/tracker-spa", { token: adminToken, json: { name: "Legacy Tracker (web)" } });
     }
   });
 });

@@ -24,6 +24,10 @@ export async function initOidcSchema(sql: InstanceType<typeof SQL>) {
     );
   `;
 
+  // Added after the table first shipped; see clients.ts `primary_resource` / `default_resources`.
+  await sql`ALTER TABLE oidc_clients ADD COLUMN IF NOT EXISTS primary_resource text;`;
+  await sql`ALTER TABLE oidc_clients ADD COLUMN IF NOT EXISTS default_resources text[] NOT NULL DEFAULT '{}';`;
+
   // Everything the provider library persists except sessions and clients:
   // grants, authorization codes, refresh tokens, interactions, replay guards.
   // `id` is a hash, never the bearer value, and `jti` is stripped from the

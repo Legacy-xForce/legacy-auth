@@ -48,9 +48,11 @@ const currentFields = (row: NonNullable<Awaited<ReturnType<typeof getClient>>>):
   post_logout_redirect_uris: row.post_logout_redirect_uris,
   backchannel_logout_uri: row.backchannel_logout_uri,
   allowed_scopes: row.allowed_scopes,
+  primary_resource: row.primary_resource,
+  default_resources: row.default_resources,
 });
 
-const EDITABLE = ["name", "redirect_uris", "post_logout_redirect_uris", "backchannel_logout_uri", "allowed_scopes"];
+const EDITABLE = ["name", "redirect_uris", "post_logout_redirect_uris", "backchannel_logout_uri", "allowed_scopes", "primary_resource", "default_resources"];
 
 /**
  * `/admin/oidc/clients…`: the registry of relying parties. The caller has

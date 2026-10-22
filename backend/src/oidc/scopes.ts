@@ -44,3 +44,9 @@ export function entitledResourceScopes(user: Pick<UserRecord, "scopes">, resourc
 }
 
 export const mayUseAdminScope = (user: Pick<UserRecord, "role">) => user.role === "admin";
+
+/** The resources (indicators) that own at least one of `scopes`, in `RESOURCE_SERVERS` order. */
+export const resourcesForScopes = (scopes: readonly string[]): string[] =>
+  Object.values(RESOURCE_SERVERS)
+    .filter((resource) => resource.scopes.some((scope) => scopes.includes(scope)))
+    .map((resource) => resource.indicator);
