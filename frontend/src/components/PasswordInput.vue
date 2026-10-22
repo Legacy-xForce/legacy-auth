@@ -10,23 +10,23 @@ const visible = ref(false);
 </script>
 
 <template>
-  <div class="relative flex-1">
+  <div class="relative min-w-0 flex-1">
     <input
       v-bind="$attrs"
       :value="modelValue"
       :type="visible ? 'text' : 'password'"
-      class="pr-9"
+      class="pr-11"
       @input="$emit('update:modelValue', ($event.target as HTMLInputElement).value)"
     />
     <button
       type="button"
-      class="icon-btn absolute right-1 top-1/2 h-7 w-7 -translate-y-1/2"
+      class="icon-btn absolute top-1/2 right-1.5 size-8 -translate-y-1/2 rounded-[10px]"
       tabindex="-1"
       :aria-label="visible ? 'Hide password' : 'Show password'"
       :aria-pressed="visible"
       @click="visible = !visible"
     >
-      <Icon :name="visible ? 'eyeOff' : 'eye'" :size="15" />
+      <Icon :name="visible ? 'eyeOff' : 'eye'" :size="16" />
     </button>
   </div>
 </template>

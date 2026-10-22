@@ -1,24 +1,28 @@
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { computed, ref, onMounted } from "vue";
 import { api } from "../../api/client";
 import { useAuthStore } from "../../stores/auth";
+import { useToastStore } from "../../stores/toast";
 import { isPasskeySupported } from "../../services/webauthn";
-import Icon from "../../components/Icon.vue";
-import UserAvatar from "../../components/UserAvatar.vue";
-import PasswordInput from "../../components/PasswordInput.vue";
 import ConfirmDialog from "../../components/ConfirmDialog.vue";
+import FormAlert from "../../components/FormAlert.vue";
+import Icon from "../../components/Icon.vue";
+import Modal from "../../components/Modal.vue";
+import PasswordInput from "../../components/PasswordInput.vue";
+import ThemePicker from "../../components/ThemePicker.vue";
+import UserAvatar from "../../components/UserAvatar.vue";
 
 const auth = useAuthStore();
+const toast = useToastStore();
 
 const username = ref(auth.user?.username ?? "");
 const usernameSaving = ref(false);
-const usernameMessage = ref("");
 const usernameError = ref("");
+const usernameChanged = computed(() => Boolean(username.value.trim()) && username.value.trim() !== auth.user?.username);
 
 const currentPassword = ref("");
 const newPassword = ref("");
 const passwordSaving = ref(false);
-const passwordMessage = ref("");
 const passwordError = ref("");
 
 const avatarInput = ref<HTMLInputElement | null>(null);
@@ -27,10 +31,12 @@ const avatarError = ref("");
 
 const passkeySupported = isPasskeySupported();
 const passkeys = ref<Array<{ id: string; deviceName: string; createdAt: string }>>([]);
+const passkeysLoaded = ref(false);
 const passkeyLoading = ref(false);
-const passkeyMessage = ref("");
 const passkeyError = ref("");
 const passkeyToDelete = ref<string | null>(null);
+const naming = ref(false);
+const passkeyName = ref("");
 
 onMounted(async () => {
   if (passkeySupported) {
@@ -38,18 +44,19 @@ onMounted(async () => {
       passkeys.value = await api.getPasskeys();
     } catch {
       // ignore on mount
+    } finally {
+      passkeysLoaded.value = true;
     }
   }
 });
 
 async function saveUsername() {
   usernameError.value = "";
-  usernameMessage.value = "";
   usernameSaving.value = true;
   try {
     await api.patch("/auth/me", { username: username.value.trim() });
     await auth.fetchMe();
-    usernameMessage.value = "Username updated.";
+    toast.success("Username updated");
   } catch (err) {
     usernameError.value = err instanceof Error ? err.message : "Failed to update username";
   } finally {
@@ -59,9 +66,8 @@ async function saveUsername() {
 
 async function changePassword() {
   passwordError.value = "";
-  passwordMessage.value = "";
   if (!currentPassword.value || !newPassword.value) {
-    passwordError.value = "Both current and new password are required.";
+    passwordError.value = "Enter your current password and a new one.";
     return;
   }
   passwordSaving.value = true;
@@ -70,7 +76,7 @@ async function changePassword() {
       current_password: currentPassword.value,
       new_password: newPassword.value,
     });
-    passwordMessage.value = "Password changed. You'll need to sign in again on other devices.";
+    toast.success("Password changed. Other devices will need to sign in again.");
     currentPassword.value = "";
     newPassword.value = "";
   } catch (err) {
@@ -93,6 +99,7 @@ async function onAvatarSelected(event: Event) {
   try {
     await api.postForm("/auth/profile-picture", formData);
     avatarVersion.value++;
+    toast.success("Picture updated");
   } catch (err) {
     avatarError.value = err instanceof Error ? err.message : "Failed to upload avatar";
   } finally {
@@ -100,15 +107,28 @@ async function onAvatarSelected(event: Event) {
   }
 }
 
-async function handleRegisterPasskey() {
+/** A name for the new passkey from this browser, e.g. "Chrome on macOS"; the user can change it. */
+function guessDeviceName() {
+  const ua = navigator.userAgent;
+  const browser = /Edg\//.test(ua) ? "Edge" : /Firefox\//.test(ua) ? "Firefox" : /Chrome\//.test(ua) ? "Chrome" : /Safari\//.test(ua) ? "Safari" : "";
+  const os = /iPhone|iPad/.test(ua) ? "iOS" : /Android/.test(ua) ? "Android" : /Mac OS X/.test(ua) ? "macOS" : /Windows/.test(ua) ? "Windows" : /Linux/.test(ua) ? "Linux" : "";
+  return [browser, os].filter(Boolean).join(" on ") || "My device";
+}
+
+function startRegisterPasskey() {
   passkeyError.value = "";
-  passkeyMessage.value = "";
+  passkeyName.value = guessDeviceName();
+  naming.value = true;
+}
+
+async function handleRegisterPasskey() {
+  naming.value = false;
+  passkeyError.value = "";
   passkeyLoading.value = true;
   try {
-    const deviceName = window.prompt("Name this passkey", "My device") || undefined;
-    await auth.registerPasskey(deviceName);
+    await auth.registerPasskey(passkeyName.value.trim() || undefined);
     passkeys.value = await api.getPasskeys();
-    passkeyMessage.value = "Passkey added successfully.";
+    toast.success("Passkey added");
   } catch (err: any) {
     if (err?.name === "NotAllowedError") {
       passkeyError.value = "Passkey registration was cancelled.";
@@ -127,12 +147,11 @@ function confirmDeletePasskey(id: string) {
 async function executeDeletePasskey() {
   if (!passkeyToDelete.value) return;
   passkeyError.value = "";
-  passkeyMessage.value = "";
   passkeyLoading.value = true;
   try {
     await api.deletePasskey(passkeyToDelete.value);
     passkeys.value = passkeys.value.filter((p) => p.id !== passkeyToDelete.value);
-    passkeyMessage.value = "Passkey removed.";
+    toast.success("Passkey removed");
   } catch (err) {
     passkeyError.value = err instanceof Error ? err.message : "Could not remove passkey";
   } finally {
@@ -140,103 +159,167 @@ async function executeDeletePasskey() {
     passkeyToDelete.value = null;
   }
 }
+
+function formatDate(value: string) {
+  return new Date(value).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+}
 </script>
 
 <template>
-  <div class="flex max-w-140 flex-col gap-5">
-    <div>
-      <h1 class="m-0 mb-1 text-2xl font-bold">Settings</h1>
-      <p class="m-0 mb-2 text-sm text-text-muted">Manage your own profile and security credentials.</p>
-    </div>
+  <div class="mx-auto flex max-w-2xl flex-col gap-9">
+    <header class="flex items-center gap-4">
+      <button
+        type="button"
+        class="group relative shrink-0 cursor-pointer rounded-full"
+        aria-label="Change profile picture"
+        @click="triggerAvatarUpload"
+      >
+        <UserAvatar v-if="auth.user" :key="avatarVersion" :user-id="auth.user.id" :name="auth.user.username" :size="72" />
+        <span
+          class="absolute -right-0.5 -bottom-0.5 flex size-7 items-center justify-center rounded-full border-[3px] border-canvas bg-primary text-primary-contrast transition-transform group-hover:scale-110"
+        >
+          <Icon name="camera" :size="13" />
+        </span>
+      </button>
+      <input ref="avatarInput" type="file" accept="image/*" class="hidden" @change="onAvatarSelected" />
+      <div class="min-w-0">
+        <h1 class="m-0 truncate text-display">{{ auth.user?.username }}</h1>
+        <p class="m-0 mt-0.5 text-meta text-muted">{{ auth.isAdmin ? "Administrator" : "Member" }} · Legacy account</p>
+      </div>
+    </header>
 
-    <div class="card p-6">
-      <h3 class="m-0 mb-4 text-base">Profile Picture</h3>
-      <div class="flex items-center gap-5">
-        <UserAvatar v-if="auth.user" :key="avatarVersion" :user-id="auth.user.id" :size="72" />
-        <div>
-          <button class="btn btn-ghost" @click="triggerAvatarUpload">
-            <Icon name="camera" :size="15" />
-            Update Avatar
+    <FormAlert v-if="avatarError" class="-mt-5">{{ avatarError }}</FormAlert>
+
+    <section class="flex flex-col gap-3" aria-labelledby="appearance-heading">
+      <div>
+        <h2 id="appearance-heading" class="eyebrow m-0">Appearance</h2>
+        <p class="m-0 mt-1 text-meta text-subtle">OLED, Catppuccin or adaptive. Saved on this device only.</p>
+      </div>
+      <ThemePicker />
+    </section>
+
+    <section class="flex flex-col gap-3" aria-labelledby="profile-heading">
+      <h2 id="profile-heading" class="eyebrow m-0">Profile</h2>
+      <form class="card flex flex-col gap-4 p-5 sm:p-6" novalidate @submit.prevent="saveUsername">
+        <div class="field">
+          <label for="settings-username">Username</label>
+          <div class="flex gap-2">
+            <input id="settings-username" v-model="username" class="input min-w-0 flex-1" autocomplete="username" autocapitalize="none" spellcheck="false" />
+            <button type="submit" class="btn btn-primary h-11 shrink-0" :disabled="usernameSaving || !usernameChanged">
+              <Icon v-if="usernameSaving" name="loader" :size="16" />
+              {{ usernameSaving ? "Saving…" : "Save" }}
+            </button>
+          </div>
+          <p class="field-hint">You sign in to every Legacy app with this name.</p>
+        </div>
+        <FormAlert v-if="usernameError">{{ usernameError }}</FormAlert>
+      </form>
+    </section>
+
+    <section class="flex flex-col gap-3" aria-labelledby="password-heading">
+      <h2 id="password-heading" class="eyebrow m-0">Password</h2>
+      <form class="card flex flex-col gap-4 p-5 sm:p-6" novalidate @submit.prevent="changePassword">
+        <!-- Lets password managers pair the new password with this account. -->
+        <input type="text" class="hidden" autocomplete="username" :value="auth.user?.username" readonly tabindex="-1" aria-hidden="true" />
+        <div class="field">
+          <label for="current-password">Current password</label>
+          <PasswordInput id="current-password" v-model="currentPassword" class="input" autocomplete="current-password" />
+        </div>
+        <div class="field">
+          <label for="new-password">New password</label>
+          <PasswordInput id="new-password" v-model="newPassword" class="input" autocomplete="new-password" />
+          <p class="field-hint">Other devices will need to sign in again.</p>
+        </div>
+        <FormAlert v-if="passwordError">{{ passwordError }}</FormAlert>
+        <div class="flex justify-end">
+          <button type="submit" class="btn btn-primary" :disabled="passwordSaving">
+            <Icon v-if="passwordSaving" name="loader" :size="16" />
+            {{ passwordSaving ? "Updating…" : "Update password" }}
           </button>
-          <p v-if="avatarError" class="mt-2.5 text-[0.82rem] text-danger">{{ avatarError }}</p>
         </div>
-        <input ref="avatarInput" type="file" accept="image/*" class="hidden" @change="onAvatarSelected" />
-      </div>
-    </div>
+      </form>
+    </section>
 
-    <div class="card p-6">
-      <h3 class="m-0 mb-4 text-base">Change Username</h3>
-      <div class="field mb-4">
-        <label>Username</label>
-        <input v-model="username" class="input" />
-      </div>
-      <button class="btn btn-primary" :disabled="usernameSaving" @click="saveUsername">
-        {{ usernameSaving ? "Saving…" : "Save Username" }}
-      </button>
-      <p v-if="usernameMessage" class="mt-2.5 text-[0.82rem] text-success">{{ usernameMessage }}</p>
-      <p v-if="usernameError" class="mt-2.5 text-[0.82rem] text-danger">{{ usernameError }}</p>
-    </div>
-
-    <div class="card p-6">
-      <h3 class="m-0 mb-4 text-base">Reset Password</h3>
-      <div class="field mb-4">
-        <label>Current Password</label>
-        <PasswordInput v-model="currentPassword" class="input" autocomplete="current-password" />
-      </div>
-      <div class="field mb-4">
-        <label>New Password</label>
-        <PasswordInput v-model="newPassword" class="input" autocomplete="new-password" />
-      </div>
-      <button class="btn btn-primary" :disabled="passwordSaving" @click="changePassword">
-        {{ passwordSaving ? "Updating…" : "Update Password" }}
-      </button>
-      <p v-if="passwordMessage" class="mt-2.5 text-[0.82rem] text-success">{{ passwordMessage }}</p>
-      <p v-if="passwordError" class="mt-2.5 text-[0.82rem] text-danger">{{ passwordError }}</p>
-    </div>
-
-    <div v-if="passkeySupported" class="card p-6">
-      <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+    <section v-if="passkeySupported" class="flex flex-col gap-3" aria-labelledby="passkeys-heading">
+      <div class="flex items-end justify-between gap-4">
         <div>
-          <h3 class="m-0 mb-1 text-base">Passkeys &amp; Biometrics</h3>
-          <p class="m-0 text-sm text-text-muted">Sign in securely without a password using Touch ID, Face ID, or Windows Hello.</p>
+          <h2 id="passkeys-heading" class="eyebrow m-0">Passkeys</h2>
+          <p class="m-0 mt-1 text-meta text-subtle">Sign in with Touch ID, Face ID, Windows Hello or a security key.</p>
         </div>
-        <button class="btn btn-ghost" :disabled="passkeyLoading" @click="handleRegisterPasskey">
-          <Icon name="plus" :size="15" />
-          {{ passkeyLoading ? "Adding…" : "Add Passkey" }}
+        <button type="button" class="btn btn-secondary btn-sm" :disabled="passkeyLoading" @click="startRegisterPasskey">
+          <Icon :name="passkeyLoading ? 'loader' : 'plus'" :size="14" />
+          Add passkey
         </button>
       </div>
 
-      <div v-if="passkeys.length" class="divide-y divide-border overflow-hidden rounded-ui border border-border">
-        <div v-for="pk in passkeys" :key="pk.id" class="flex items-center justify-between bg-bg-card p-3.5">
-          <div class="flex items-center gap-3">
-            <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-accent-soft text-accent">
-              <Icon name="key" :size="16" />
+      <div class="card overflow-hidden">
+        <ul v-if="passkeys.length" class="m-0 list-none divide-y divide-line p-0">
+          <li v-for="pk in passkeys" :key="pk.id" class="flex items-center gap-3.5 px-5 py-3.5 sm:px-6">
+            <div class="flex size-10 shrink-0 items-center justify-center rounded-ui bg-accent/12 text-accent">
+              <Icon name="fingerprint" :size="18" />
             </div>
-            <div>
-              <div class="text-sm font-medium text-text">{{ pk.deviceName || "Passkey" }}</div>
-              <div class="text-xs text-text-dim">Added {{ new Date(pk.createdAt).toLocaleDateString() }}</div>
+            <div class="min-w-0 flex-1">
+              <div class="truncate text-body font-semibold">{{ pk.deviceName || "Passkey" }}</div>
+              <div class="text-meta text-muted">Added {{ formatDate(pk.createdAt) }}</div>
             </div>
+            <button
+              type="button"
+              class="icon-btn hover:not-disabled:bg-danger/12 hover:not-disabled:text-danger"
+              :disabled="passkeyLoading"
+              :aria-label="`Remove ${pk.deviceName || 'passkey'}`"
+              @click="confirmDeletePasskey(pk.id)"
+            >
+              <Icon name="trash" :size="16" />
+            </button>
+          </li>
+        </ul>
+        <div v-else-if="passkeysLoaded" class="flex flex-col items-center px-6 py-10 text-center">
+          <div class="flex size-12 items-center justify-center rounded-full bg-fg/6 text-muted">
+            <Icon name="fingerprint" :size="22" />
           </div>
-          <button class="btn btn-danger py-1.5 px-2.5 text-xs" :disabled="passkeyLoading" @click="confirmDeletePasskey(pk.id)">
-            <Icon name="trash" :size="14" />
-            Remove
-          </button>
+          <p class="m-0 mt-3 text-body font-semibold">No passkeys yet</p>
+          <p class="m-0 mt-0.5 max-w-xs text-meta text-muted">Add one to sign in without typing your password.</p>
+        </div>
+        <div v-else class="flex items-center gap-3.5 px-5 py-3.5 sm:px-6" aria-busy="true">
+          <span class="size-10 animate-pulse rounded-ui bg-fg/8" />
+          <span class="h-3 w-32 animate-pulse rounded-full bg-fg/8" />
         </div>
       </div>
-      <p v-else class="m-0 text-sm text-text-muted">No passkeys registered yet.</p>
 
-      <p v-if="passkeyMessage" class="mt-3 text-[0.82rem] text-success">{{ passkeyMessage }}</p>
-      <p v-if="passkeyError" class="mt-3 text-[0.82rem] text-danger">{{ passkeyError }}</p>
+      <FormAlert v-if="passkeyError">{{ passkeyError }}</FormAlert>
+
+      <Modal :open="naming" labelledby="passkey-name-title" @close="naming = false">
+        <form novalidate @submit.prevent="handleRegisterPasskey">
+          <div class="mb-4 flex size-11 items-center justify-center rounded-full bg-accent/12 text-accent">
+            <Icon name="fingerprint" :size="20" />
+          </div>
+          <h2 id="passkey-name-title" class="m-0 text-headline">Name this passkey</h2>
+          <p class="m-0 mt-2 text-body text-muted">So you can tell it apart from your other devices later.</p>
+          <input
+            v-model="passkeyName"
+            class="input mt-5"
+            aria-label="Passkey name"
+            maxlength="64"
+            autocomplete="off"
+            autofocus
+          />
+          <div class="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <button type="button" class="btn btn-secondary" @click="naming = false">Cancel</button>
+            <button type="submit" class="btn btn-primary">Continue</button>
+          </div>
+        </form>
+      </Modal>
 
       <ConfirmDialog
         :open="Boolean(passkeyToDelete)"
-        title="Remove Passkey"
-        message="Are you sure you want to delete this passkey? You will no longer be able to use it to sign in."
+        title="Remove this passkey?"
+        message="You won't be able to sign in with it any more. You can add it again later."
         confirm-label="Remove"
         danger
+        :busy="passkeyLoading"
         @confirm="executeDeletePasskey"
         @cancel="passkeyToDelete = null"
       />
-    </div>
+    </section>
   </div>
 </template>
