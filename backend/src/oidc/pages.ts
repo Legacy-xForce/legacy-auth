@@ -49,7 +49,6 @@ const STYLE = `
   dt{color:var(--subtle)}
   dd{margin:0;color:var(--muted);overflow-wrap:anywhere}
   .spinner{width:22px;height:22px;margin:1.75rem auto 0;border:2.5px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}
-  footer{margin-top:auto;padding:0 0 1.5rem;font-size:12px;color:var(--subtle);text-align:center}
   @keyframes rise{from{opacity:0;transform:translateY(8px)}}
   @keyframes spin{to{transform:rotate(1turn)}}
   @media (prefers-reduced-motion:reduce){main,.spinner{animation:none}}
@@ -70,7 +69,7 @@ const page = (title: string, mark: keyof typeof MARKS, body: string) =>
   `<meta name="color-scheme" content="dark light"><meta name="referrer" content="no-referrer"><title>${escapeHtml(title)} · Legacy Auth</title>` +
   `<style>${STYLE}</style></head><body><main>` +
   `<div class="mark${mark === "brand" ? "" : ` ${mark}`}"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true">${SHIELD}${MARKS[mark]}</svg></div>` +
-  `${body}</main><footer>One Legacy account for the calendar and the tracker.</footer></body></html>`;
+  `${body}</main></body></html>`;
 
 // The one inline script of the OP's own pages. The CSP names its hash, so it is
 // the only script that may run.

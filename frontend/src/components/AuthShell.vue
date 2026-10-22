@@ -35,9 +35,5 @@ defineProps<{ title: string }>();
         <slot />
       </div>
     </main>
-
-    <footer class="px-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] text-center text-xs text-subtle">
-      One Legacy account for the calendar and the tracker.
-    </footer>
   </div>
 </template>
