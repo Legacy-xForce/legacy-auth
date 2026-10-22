@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { Teleport, Transition } from "vue";
 import Icon from "./Icon.vue";
+import Modal from "./Modal.vue";
 
 withDefaults(
   defineProps<{
@@ -24,47 +24,27 @@ const emit = defineEmits<{ confirm: []; cancel: [] }>();
 </script>
 
 <template>
-  <Teleport to="body">
-    <Transition name="confirm-fade">
-      <div v-if="open" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm" @click.self="emit('cancel')">
-        <div class="card w-full max-w-90 p-6 shadow-2xl">
-          <div class="mb-4 flex items-center gap-3">
-            <div
-              class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full"
-              :class="danger ? 'bg-danger-soft text-danger' : 'bg-accent-soft text-accent'"
-            >
-              <Icon name="alertTriangle" :size="18" />
-            </div>
-            <h3 class="m-0 text-base font-bold">{{ title }}</h3>
-          </div>
-          <p class="m-0 mb-6 text-sm text-text-muted">{{ message }}</p>
-          <div class="flex justify-end gap-2.5">
-            <button class="btn btn-ghost" :disabled="busy" @click="emit('cancel')">{{ cancelLabel }}</button>
-            <button class="btn" :class="danger ? 'btn-danger-solid' : 'btn-primary'" :disabled="busy" @click="emit('confirm')">
-              {{ busy ? "Please wait…" : confirmLabel }}
-            </button>
-          </div>
-        </div>
-      </div>
-    </Transition>
-  </Teleport>
+  <Modal :open="open" :busy="busy" labelledby="confirm-title" @close="emit('cancel')">
+    <div
+      class="mb-4 flex size-11 items-center justify-center rounded-full"
+      :class="danger ? 'bg-danger/12 text-danger' : 'bg-accent/12 text-accent'"
+    >
+      <Icon :name="danger ? 'alertTriangle' : 'info'" :size="20" />
+    </div>
+    <h2 id="confirm-title" class="m-0 text-headline">{{ title }}</h2>
+    <p class="m-0 mt-2 text-body text-muted">{{ message }}</p>
+    <div class="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+      <button type="button" class="btn btn-secondary" :disabled="busy" @click="emit('cancel')">{{ cancelLabel }}</button>
+      <button
+        type="button"
+        class="btn"
+        :class="danger ? 'btn-danger-solid' : 'btn-primary'"
+        :disabled="busy"
+        @click="emit('confirm')"
+      >
+        <Icon v-if="busy" name="loader" :size="16" />
+        {{ confirmLabel }}
+      </button>
+    </div>
+  </Modal>
 </template>
-
-<style scoped>
-.confirm-fade-enter-active,
-.confirm-fade-leave-active {
-  transition: opacity 0.15s ease;
-}
-.confirm-fade-enter-from,
-.confirm-fade-leave-to {
-  opacity: 0;
-}
-.confirm-fade-enter-active .card,
-.confirm-fade-leave-active .card {
-  transition: transform 0.15s ease;
-}
-.confirm-fade-enter-from .card,
-.confirm-fade-leave-to .card {
-  transform: scale(0.96);
-}
-</style>

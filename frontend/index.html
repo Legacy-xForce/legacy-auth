@@ -1,10 +1,29 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="oled">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Legacy Auth Console</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#000000" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="darkreader-lock" />
+    <script>
+      // Apply the saved theme before the first paint to avoid a flash of the default palette.
+      // Keep the ids in sync with src/theme/themes.ts.
+      (() => {
+        try {
+          const themes = ["oled", "catppuccin-mocha", "catppuccin-macchiato", "catppuccin-frappe", "catppuccin-latte", "adaptive"];
+          const stored = localStorage.getItem("pref_theme");
+          let theme = themes.includes(stored) ? stored : "oled";
+          if (theme === "adaptive") theme = matchMedia("(prefers-color-scheme: light)").matches ? "catppuccin-latte" : "oled";
+          document.documentElement.dataset.theme = theme;
+          document.documentElement.style.colorScheme = theme === "catppuccin-latte" ? "light" : "dark";
+        } catch {
+          // Storage can be unavailable; fall through to the OLED defaults.
+        }
+      })();
+    </script>
+    <title>Legacy Auth</title>
   </head>
   <body>
     <div id="app"></div>

@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import { avatarUrl } from "../api/client";
 import Icon from "./Icon.vue";
 
-const props = withDefaults(defineProps<{ userId: string; size?: number }>(), { size: 40 });
+const props = withDefaults(defineProps<{ userId: string; name?: string; size?: number }>(), { size: 40 });
 
 const failed = ref(false);
 watch(
@@ -12,14 +12,17 @@ watch(
     failed.value = false;
   }
 );
+
+const initial = computed(() => props.name?.trim().charAt(0).toUpperCase() ?? "");
 </script>
 
 <template>
   <div
-    class="flex shrink-0 items-center justify-center overflow-hidden rounded-full border border-border bg-bg-input text-text-dim"
-    :style="{ width: size + 'px', height: size + 'px' }"
+    class="flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-accent/14 font-semibold text-accent ring-1 ring-fg/8 select-none"
+    :style="{ width: size + 'px', height: size + 'px', fontSize: Math.round(size * 0.4) + 'px' }"
   >
-    <img v-if="!failed" :src="avatarUrl(userId)" alt="" class="h-full w-full object-cover" @error="failed = true" />
-    <Icon v-else name="user" :size="Math.round(size * 0.55)" />
+    <img v-if="!failed" :src="avatarUrl(userId)" alt="" class="size-full object-cover" @error="failed = true" />
+    <span v-else-if="initial" aria-hidden="true">{{ initial }}</span>
+    <Icon v-else name="user" :size="Math.round(size * 0.5)" />
   </div>
 </template>

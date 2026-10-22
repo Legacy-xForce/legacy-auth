@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 import { getPasskeyAssertion, isPasskeySupported } from "../services/webauthn";
+import AuthShell from "../components/AuthShell.vue";
+import FormAlert from "../components/FormAlert.vue";
 import Icon from "../components/Icon.vue";
 import PasswordInput from "../components/PasswordInput.vue";
 
@@ -124,62 +126,86 @@ async function onCancel() {
 </script>
 
 <template>
-  <div class="flex min-h-screen flex-col items-center px-6 pb-16 pt-12">
-    <div class="mb-7 text-center">
-      <div class="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-xl bg-accent-soft text-accent">
-        <Icon name="shield" :size="22" />
-      </div>
-      <h1 class="m-0 text-2xl font-bold">Legacy</h1>
-      <p v-if="details?.client.name" class="mt-1 text-sm text-text-muted" data-testid="client-name">
-        Sign in to <strong class="font-semibold text-text">{{ details.client.name }}</strong>
+  <AuthShell :title="expired ? 'Link expired' : 'Sign in'">
+    <template #subtitle>
+      <p v-if="expired" class="m-0 mt-1.5 text-body text-muted">This sign-in page is no longer valid.</p>
+      <p v-else-if="details?.client.name" class="m-0 mt-1.5 text-body text-muted" data-testid="client-name">
+        to continue to <strong class="font-semibold text-fg">{{ details.client.name }}</strong>
       </p>
-      <p v-else class="mt-1 text-sm text-text-muted">Sign in with your Legacy account</p>
+      <p v-else class="m-0 mt-1.5 text-body text-muted">with your Legacy account</p>
+    </template>
+
+    <div v-if="expired" class="card flex flex-col items-center gap-4 p-7 text-center" data-testid="expired">
+      <div class="flex size-12 items-center justify-center rounded-full bg-warning/12 text-warning">
+        <Icon name="alertTriangle" :size="22" />
+      </div>
+      <div>
+        <h2 class="m-0 text-title">This sign-in link has expired</h2>
+        <p class="m-0 mt-1.5 text-body text-muted">Go back to the app you came from and start signing in again.</p>
+      </div>
     </div>
 
-    <div v-if="expired" class="card flex w-full max-w-95 flex-col gap-3 p-7" data-testid="expired">
-      <h2 class="m-0 text-base font-semibold">This sign-in link has expired</h2>
-      <p class="m-0 text-sm text-text-muted">Go back to the app you came from and start signing in again.</p>
-    </div>
-
-    <form v-else class="card flex w-full max-w-95 flex-col gap-4.5 p-7" @submit.prevent="onSubmit">
-      <div class="field">
-        <label for="username">Username</label>
-        <div class="input-wrap">
-          <Icon name="mail" />
-          <input id="username" v-model="username" class="input" placeholder="username" autocomplete="username webauthn" autofocus />
-        </div>
-      </div>
-
-      <div class="field">
-        <label for="password">Password</label>
-        <div class="input-wrap">
-          <Icon name="lock" />
-          <PasswordInput id="password" v-model="password" class="input" placeholder="••••••••" autocomplete="current-password" />
-        </div>
-      </div>
-
-      <p v-if="error" class="m-0 text-[0.82rem] text-danger" role="alert" data-testid="error">{{ error }}</p>
-
-      <button type="submit" class="btn btn-primary w-full py-3 text-[0.95rem]" :disabled="loading || passkeyLoading || cancelling">
-        {{ loading ? "Signing in…" : "Sign In" }}
-        <Icon name="arrowRight" :size="16" />
-      </button>
-
-      <template v-if="passkeySupported">
-        <div class="relative my-0.5 flex items-center justify-center">
-          <div class="w-full border-t border-border"></div>
-          <span class="absolute bg-bg-card px-2.5 text-[0.72rem] font-semibold uppercase tracking-wider text-text-dim">or</span>
+    <template v-else>
+      <form class="card flex flex-col gap-4 p-6 sm:p-7" novalidate @submit.prevent="onSubmit">
+        <div class="field">
+          <label for="username">Username</label>
+          <div class="input-wrap">
+            <Icon name="at" />
+            <input
+              id="username"
+              v-model="username"
+              class="input"
+              placeholder="Your username"
+              autocomplete="username webauthn"
+              autocapitalize="none"
+              spellcheck="false"
+              autofocus
+            />
+          </div>
         </div>
 
-        <button type="button" class="btn btn-ghost w-full py-3 text-[0.95rem]" :disabled="loading || passkeyLoading || cancelling" @click="onPasskey">
-          <Icon name="key" :size="16" />
-          {{ passkeyLoading ? "Authenticating…" : "Sign in with Passkey" }}
+        <div class="field">
+          <label for="password">Password</label>
+          <div class="input-wrap">
+            <Icon name="lock" />
+            <PasswordInput id="password" v-model="password" class="input" placeholder="Your password" autocomplete="current-password" />
+          </div>
+        </div>
+
+        <FormAlert v-if="error" data-testid="error">{{ error }}</FormAlert>
+
+        <button type="submit" class="btn btn-primary btn-lg mt-1 w-full" :disabled="loading || passkeyLoading || cancelling">
+          <Icon v-if="loading" name="loader" :size="18" />
+          {{ loading ? "Signing in…" : "Sign in" }}
+          <Icon v-if="!loading" name="arrowRight" :size="18" />
         </button>
-      </template>
 
-      <button type="button" class="btn btn-ghost w-full text-[0.85rem]" :disabled="loading || passkeyLoading || cancelling" data-testid="cancel" @click="onCancel">
-        Cancel
-      </button>
-    </form>
-  </div>
+        <template v-if="passkeySupported">
+          <div class="flex items-center gap-3 text-xs font-medium text-subtle">
+            <span class="h-px flex-1 bg-line" />
+            or
+            <span class="h-px flex-1 bg-line" />
+          </div>
+
+          <button type="button" class="btn btn-secondary btn-lg w-full" :disabled="loading || passkeyLoading || cancelling" @click="onPasskey">
+            <Icon :name="passkeyLoading ? 'loader' : 'fingerprint'" :size="18" />
+            {{ passkeyLoading ? "Waiting for your passkey…" : "Sign in with a passkey" }}
+          </button>
+        </template>
+      </form>
+
+      <div class="mt-5 flex justify-center">
+        <button
+          type="button"
+          class="btn btn-ghost btn-sm"
+          :disabled="loading || passkeyLoading || cancelling"
+          data-testid="cancel"
+          @click="onCancel"
+        >
+          <Icon :name="cancelling ? 'loader' : 'arrowLeft'" :size="14" />
+          {{ details?.client.name ? `Back to ${details.client.name}` : "Cancel" }}
+        </button>
+      </div>
+    </template>
+  </AuthShell>
 </template>

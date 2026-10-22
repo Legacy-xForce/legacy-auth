@@ -4,6 +4,8 @@ import { useRouter, useRoute } from "vue-router";
 import { useAuthStore } from "../stores/auth";
 import { ApiError } from "../api/client";
 import { isPasskeySupported } from "../services/webauthn";
+import AuthShell from "../components/AuthShell.vue";
+import FormAlert from "../components/FormAlert.vue";
 import Icon from "../components/Icon.vue";
 import PasswordInput from "../components/PasswordInput.vue";
 
@@ -59,63 +61,68 @@ async function handlePasskeyLogin() {
 </script>
 
 <template>
-  <div class="flex min-h-screen flex-col items-center px-6 pb-16 pt-12">
-    <div class="mb-7 text-center">
-      <div class="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-xl bg-accent-soft text-accent">
-        <Icon name="shield" :size="22" />
-      </div>
-      <h1 class="m-0 text-2xl font-bold">Legacy Auth</h1>
-      <p class="mt-1 text-sm text-text-muted">Management Console Access</p>
-    </div>
+  <AuthShell title="Legacy Auth">
+    <template #subtitle>
+      <p class="m-0 mt-1.5 text-body text-muted">Sign in to manage your Legacy account.</p>
+    </template>
 
-    <form class="card flex w-full max-w-95 flex-col gap-4.5 p-7" @submit.prevent="onSubmit">
+    <form class="card flex flex-col gap-4 p-6 sm:p-7" novalidate @submit.prevent="onSubmit">
       <div class="field">
         <label for="username">Username</label>
         <div class="input-wrap">
-          <Icon name="mail" />
-          <input id="username" v-model="username" class="input" placeholder="username" autocomplete="username" />
+          <Icon name="at" />
+          <input
+            id="username"
+            v-model="username"
+            class="input"
+            placeholder="Your username"
+            autocomplete="username"
+            autocapitalize="none"
+            spellcheck="false"
+            autofocus
+          />
         </div>
       </div>
 
       <div class="field">
-        <div class="flex items-center justify-between">
-          <label for="password">Password</label>
-        </div>
+        <label for="password">Password</label>
         <div class="input-wrap">
           <Icon name="lock" />
           <PasswordInput
             id="password"
             v-model="password"
             class="input"
-            placeholder="••••••••"
+            placeholder="Your password"
             autocomplete="current-password"
           />
         </div>
       </div>
 
-      <p v-if="error" class="m-0 text-[0.82rem] text-danger">{{ error }}</p>
+      <FormAlert v-if="error">{{ error }}</FormAlert>
 
-      <button type="submit" class="btn btn-primary w-full py-3 text-[0.95rem]" :disabled="loading || passkeyLoading">
-        {{ loading ? "Signing in…" : "Sign In" }}
-        <Icon name="arrowRight" :size="16" />
+      <button type="submit" class="btn btn-primary btn-lg mt-1 w-full" :disabled="loading || passkeyLoading">
+        <Icon v-if="loading" name="loader" :size="18" />
+        {{ loading ? "Signing in…" : "Sign in" }}
+        <Icon v-if="!loading" name="arrowRight" :size="18" />
       </button>
 
       <template v-if="passkeySupported">
-        <div class="relative my-0.5 flex items-center justify-center">
-          <div class="w-full border-t border-border"></div>
-          <span class="absolute bg-bg-card px-2.5 text-[0.72rem] font-semibold uppercase tracking-wider text-text-dim">or</span>
+        <div class="flex items-center gap-3 text-xs font-medium text-subtle">
+          <span class="h-px flex-1 bg-line" />
+          or
+          <span class="h-px flex-1 bg-line" />
         </div>
 
         <button
           type="button"
-          class="btn btn-ghost w-full py-3 text-[0.95rem]"
+          class="btn btn-secondary btn-lg w-full"
           :disabled="loading || passkeyLoading"
           @click="handlePasskeyLogin"
         >
-          <Icon name="key" :size="16" />
-          {{ passkeyLoading ? "Authenticating…" : "Sign in with Passkey" }}
+          <Icon :name="passkeyLoading ? 'loader' : 'fingerprint'" :size="18" />
+          {{ passkeyLoading ? "Waiting for your passkey…" : "Sign in with a passkey" }}
         </button>
       </template>
     </form>
-  </div>
+  </AuthShell>
 </template>
