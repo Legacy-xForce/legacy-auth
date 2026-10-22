@@ -109,8 +109,8 @@ async function copyId(id: string) {
           v-model="search"
           class="input"
           enterkeyhint="search"
-          placeholder="Search by username"
-          aria-label="Search by username"
+          placeholder="Search by name or username"
+          aria-label="Search by name or username"
           autofocus
           autocomplete="off"
           data-form-type="other"
@@ -166,17 +166,18 @@ async function copyId(id: string) {
           class="group relative grid grid-cols-[minmax(0,1fr)_1.25rem] items-center gap-4 px-4 py-3 transition-colors hover:bg-fg/3 sm:grid-cols-[minmax(0,1fr)_7.5rem_7rem_1.25rem] sm:px-5"
         >
           <div class="flex min-w-0 items-center gap-3">
-            <UserAvatar :user-id="user.id" :name="user.username" :size="40" />
+            <UserAvatar :user-id="user.id" :name="user.display_name || user.username" :size="40" />
             <div class="min-w-0">
               <div class="flex min-w-0 items-center gap-2">
                 <RouterLink
                   :to="{ name: 'user-edit', params: { id: user.id } }"
                   class="truncate font-semibold text-fg no-underline after:absolute after:inset-0 after:content-['']"
                 >
-                  {{ user.username }}
+                  {{ user.display_name || user.username }}
                 </RouterLink>
                 <span v-if="user.id === auth.user?.id" class="chip h-5 shrink-0 bg-fg/6 px-2 text-[0.6875rem] text-muted">You</span>
               </div>
+              <div class="mt-0.5 truncate text-meta text-subtle">@{{ user.username }}</div>
               <div class="mt-1 flex items-center gap-2 sm:hidden">
                 <span v-if="user.role === 'admin'" class="chip h-5 bg-accent/12 px-2 text-[0.6875rem] text-accent">Admin</span>
                 <StatusPill :active="user.active" class="h-5 px-2 text-[0.6875rem]" />

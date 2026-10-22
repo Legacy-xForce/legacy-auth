@@ -2,6 +2,7 @@ import { config } from "./config.ts";
 import { applyCorsOrigin, createCorsPreflightResponse, withCorsHeaders } from "./cors.ts";
 import { findUserByUsername, findUserActiveByUsername, findUserById, saveRefreshToken, findRefreshTokenByJti, verifyRefreshTokenHash, claimRefreshToken, revokeRefreshFamily, revokeRefreshToken, revokeAllRefreshTokensForUser, updateUserPasswordHash, createUserWithActive, listUsersPaginated, updateUserProfile, updateUserScopes, deleteUserById, insertAuthEvent, listAuthEvents, AuthEvent } from "./db.ts";
 import { APP_AUDIENCES, UserRecord, UserRole, UserScopes } from "./types.ts";
+import { displayNameFromInput, normalizeUsername } from "./usernames.ts";
 import { getCachedUser, cacheUser, invalidateCachedUser } from "./cache.ts";
 import { signAccessToken, signRefreshToken, verifyAccessToken, verifyRefreshToken, getRefreshTokenExpiresAt, resolveAudience, AudienceError } from "./jwt.ts";
 import { throttleKeys, retryAfterSeconds, recordFailure, clearUserFailures, isPrivateAddress } from "./throttle.ts";
@@ -230,7 +231,7 @@ function tooManyAttempts(retryAfter: number) {
 
 async function handleLogin(request: Request) {
   const body = await parseJson<{ username?: string; password?: string; audience?: string }>(request);
-  const username = String(body.username ?? "").trim();
+  const username = normalizeUsername(body.username);
   const password = String(body.password ?? "");
   if (!username || !password) {
     return new Response(JSON.stringify({ error: "username and password are required" }), { status: 400, headers: withCorsHeaders(jsonHeaders) });
@@ -274,6 +275,7 @@ async function handleLogin(request: Request) {
     user = {
       id: record.id,
       username: record.username,
+      display_name: record.display_name,
       password_hash: record.password_hash,
       role: record.role,
       active: record.active,
@@ -304,6 +306,7 @@ async function handleLogin(request: Request) {
       user = {
         id: updatedUser.id,
         username: updatedUser.username,
+        display_name: updatedUser.display_name,
         password_hash: updatedUser.password_hash,
         role: updatedUser.role,
         active: updatedUser.active,
@@ -313,7 +316,7 @@ async function handleLogin(request: Request) {
     }
   }
 
-  const accessToken = signAccessToken({ sub: user.id, username: user.username, role: user.role, scopes: user.scopes, audience });
+  const accessToken = signAccessToken({ sub: user.id, username: user.username, displayName: user.display_name, role: user.role, scopes: user.scopes, audience });
   const refreshTokenMeta = signRefreshToken({ sub: user.id, username: user.username, app: body.audience ? audience[0] : undefined });
   await saveRefreshToken(user.id, refreshTokenMeta.jti, refreshTokenMeta.token, getRefreshTokenExpiresAt());
   audit(request, { event: "login", success: true, userId: user.id, username: user.username, detail: audience.join(",") || null });
@@ -397,7 +400,7 @@ async function handleRefresh(request: Request) {
   if (claim === "grace") {
     audit(request, { event: "refresh", success: true, userId: user.id, username: user.username, detail: "reused within grace period" });
   }
-  const accessToken = signAccessToken({ sub: payload.sub, username: user.username, role: user.role, scopes: user.scopes, audience });
+  const accessToken = signAccessToken({ sub: payload.sub, username: user.username, displayName: user.display_name, role: user.role, scopes: user.scopes, audience });
   const refreshTokenMeta = signRefreshToken({ sub: payload.sub, username: user.username, app: payload.app });
   await saveRefreshToken(payload.sub, refreshTokenMeta.jti, refreshTokenMeta.token, getRefreshTokenExpiresAt(), family);
 
@@ -492,7 +495,7 @@ async function handleChangePassword(request: Request) {
 
 async function handlePasskeyLoginOptions(request: Request) {
   const body = await parseJson<{ username?: string }>(request).catch(() => ({} as { username?: string }));
-  const username = typeof body.username === "string" && body.username.trim() ? body.username.trim() : undefined;
+  const username = typeof body.username === "string" && body.username.trim() ? normalizeUsername(body.username) : undefined;
   const options = await generateLoginOptions(username);
   return new Response(JSON.stringify(options), { status: 200, headers: withCorsHeaders(jsonHeaders) });
 }
@@ -701,6 +704,7 @@ function toPublicUser(user: UserRecord) {
   return {
     id: user.id,
     username: user.username,
+    display_name: user.display_name,
     role: user.role,
     active: user.active,
     scopes: user.scopes,
@@ -710,9 +714,10 @@ function toPublicUser(user: UserRecord) {
 }
 
 /** The fields an admin update touched, without the password itself. */
-function describeUserUpdate(body: { username?: string; role?: string; active?: boolean; password?: string; scopes?: { calendar?: boolean; tracker?: boolean } }) {
+function describeUserUpdate(body: { username?: string; display_name?: string; role?: string; active?: boolean; password?: string; scopes?: { calendar?: boolean; tracker?: boolean } }) {
   const parts: string[] = [];
-  if (body.username !== undefined) parts.push(`username=${String(body.username).trim()}`);
+  if (body.username !== undefined) parts.push(`username=${normalizeUsername(body.username)}`);
+  if (body.display_name !== undefined) parts.push(`display_name=${displayNameFromInput(body.display_name)}`);
   if (body.role !== undefined) parts.push(`role=${normalizeRole(body.role)}`);
   if (body.active !== undefined) parts.push(`active=${Boolean(body.active)}`);
   if (body.scopes !== undefined) parts.push(`scopes=calendar:${Boolean(body.scopes?.calendar)},tracker:${Boolean(body.scopes?.tracker)}`);
@@ -734,9 +739,10 @@ async function handleUpdateMe(request: Request) {
   const auth = await authenticate(request);
   if (auth instanceof Response) return auth;
 
-  const body = await parseJson<{ username?: string }>(request);
-  const update: { username?: string } = {};
-  if (body.username !== undefined) update.username = String(body.username).trim();
+  const body = await parseJson<{ username?: string; display_name?: string }>(request);
+  const update: { username?: string; displayName?: string } = {};
+  if (body.username !== undefined) update.username = displayNameFromInput(body.username);
+  if (body.display_name !== undefined) update.displayName = displayNameFromInput(body.display_name);
 
   if (Object.keys(update).length === 0) {
     return new Response(JSON.stringify(toPublicUser(auth)), { status: 200, headers: withCorsHeaders(jsonHeaders) });
@@ -825,8 +831,10 @@ async function handleCreateUser(request: Request) {
   const auth = await authenticateAdmin(request);
   if (auth instanceof Response) return auth;
 
-  const body = await parseJson<{ username?: string; password?: string; role?: string; active?: boolean }>(request);
-  const username = String(body.username ?? "").trim();
+  const body = await parseJson<{ username?: string; display_name?: string; password?: string; role?: string; active?: boolean }>(request);
+  const typedUsername = displayNameFromInput(body.username);
+  const username = normalizeUsername(typedUsername);
+  const displayName = displayNameFromInput(body.display_name) || typedUsername;
   const password = String(body.password ?? "");
   if (!username || !password) {
     return new Response(JSON.stringify({ error: "username and password are required" }), { status: 400, headers: withCorsHeaders(jsonHeaders) });
@@ -836,7 +844,7 @@ async function handleCreateUser(request: Request) {
   const active = body.active === undefined ? true : Boolean(body.active);
 
   try {
-    const user = await createUserWithActive(username, password, active, { role });
+    const user = await createUserWithActive(username, password, active, { role, displayName });
     audit(request, { event: "admin_user_create", success: true, userId: user.id, username: user.username, actorId: auth.id, detail: `role=${role} active=${active}` });
     return new Response(JSON.stringify(toPublicUser(user)), { status: 201, headers: withCorsHeaders(jsonHeaders) });
   } catch (error) {
@@ -865,6 +873,7 @@ async function handleUpdateUser(request: Request, id: string) {
 
   const body = await parseJson<{
     username?: string;
+    display_name?: string;
     role?: string;
     active?: boolean;
     password?: string;
@@ -877,8 +886,9 @@ async function handleUpdateUser(request: Request, id: string) {
   }
   const previousUsername = user.username;
 
-  const profileUpdate: { username?: string; role?: UserRole; active?: boolean } = {};
-  if (body.username !== undefined) profileUpdate.username = String(body.username).trim();
+  const profileUpdate: { username?: string; displayName?: string; role?: UserRole; active?: boolean } = {};
+  if (body.username !== undefined) profileUpdate.username = displayNameFromInput(body.username);
+  if (body.display_name !== undefined) profileUpdate.displayName = displayNameFromInput(body.display_name);
   if (body.role !== undefined) profileUpdate.role = normalizeRole(body.role);
   if (body.active !== undefined) profileUpdate.active = Boolean(body.active);
 

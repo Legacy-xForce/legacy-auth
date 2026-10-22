@@ -2,6 +2,7 @@ import { initDatabase, createUserWithActive } from "../db.ts";
 
 function usage() {
   console.error("Usage: bun run user:add <username> <password> [--inactive] [--admin]");
+  console.error("The username is stored lowercase; its capitalization becomes the display name.");
 }
 
 function getArgs() {
@@ -29,7 +30,7 @@ async function main() {
 
   try {
     const user = await createUserWithActive(username, password, active, { role });
-    console.log(`Created user ${user.username} (${user.id}) [active=${user.active}, role=${user.role}]`);
+    console.log(`Created user ${user.username} (${user.id}) [display_name=${user.display_name}, active=${user.active}, role=${user.role}]`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (message.toLowerCase().includes("unique")) {

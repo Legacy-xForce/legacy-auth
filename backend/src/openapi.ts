@@ -402,7 +402,7 @@ export function createOpenApiDocument(): OpenApiDocument {
         get: {
           tags: ["OpenID Provider"],
           summary: "Claims about the signed-in user",
-          description: "Returns `sub`, `preferred_username` and `role`. Needs a bearer token with the `openid` scope that was requested *without* a `resource`: an access token for an app's API is for that app, not for the provider.",
+          description: "Returns `sub`, `preferred_username`, `name` and `role`. `preferred_username` is the lowercase login identifier; `name` is the user's display name. Needs a bearer token with the `openid` scope that was requested *without* a `resource`: an access token for an app's API is for that app, not for the provider.",
           security: [{ bearerAuth: [] }],
           responses: { "200": { description: "Claims" }, "401": { description: "Missing, invalid or resource-bound token" } },
         },

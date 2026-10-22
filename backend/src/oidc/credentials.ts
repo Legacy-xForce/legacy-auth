@@ -2,6 +2,7 @@ import { invalidateCachedUser } from "../cache.ts";
 import { findUserByUsername, updateUserPasswordHash } from "../db.ts";
 import { clearUserFailures, recordFailure, retryAfterSeconds, throttleKeys } from "../throttle.ts";
 import type { UserRecord } from "../types.ts";
+import { normalizeUsername } from "../usernames.ts";
 
 export type PasswordLogin =
   | { ok: true; user: UserRecord }
@@ -18,7 +19,8 @@ const getDummyHash = () => (dummyHash ??= Bun.password.hash("not-a-real-password
  * `ip` is the address to count against, or null when only a proxy's is known.
  */
 export async function checkPasswordLogin(username: string, password: string, ip: string | null): Promise<PasswordLogin> {
-  const throttle = throttleKeys(ip, username);
+  const normalizedUsername = normalizeUsername(username);
+  const throttle = throttleKeys(ip, normalizedUsername);
   const retryAfter = retryAfterSeconds(throttle);
   if (retryAfter !== null) return { ok: false, status: 429, error: "Too many failed attempts, try again later", retryAfter };
 
@@ -27,7 +29,7 @@ export async function checkPasswordLogin(username: string, password: string, ip:
     return { ok: false, status, error, userId };
   };
 
-  const user = await findUserByUsername(username);
+  const user = await findUserByUsername(normalizedUsername);
   if (!user) {
     await Bun.password.verify(password, await getDummyHash());
     return fail(401, "Invalid credentials");
@@ -35,11 +37,11 @@ export async function checkPasswordLogin(username: string, password: string, ip:
   if (!user.active) return fail(403, "Account disabled", user.id);
   if (!(await Bun.password.verify(password, user.password_hash))) return fail(401, "Invalid credentials", user.id);
 
-  clearUserFailures(username);
+  clearUserFailures(normalizedUsername);
   // Same upgrade /auth/login does: bcrypt hashes become Argon2 on a successful sign-in.
   if (user.password_hash.startsWith("$2")) {
     const upgraded = await updateUserPasswordHash(user.id, await Bun.password.hash(password));
-    invalidateCachedUser(username);
+    invalidateCachedUser(normalizedUsername);
     if (upgraded) return { ok: true, user: upgraded };
   }
   return { ok: true, user };

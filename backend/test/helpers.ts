@@ -17,18 +17,21 @@ export function startApp(): TestApp {
   return { url: `http://localhost:${server.port}`, stop: () => server.stop(true) };
 }
 
-export type TestUser = { id: string; username: string; password: string };
+export type TestUser = { id: string; username: string; displayName?: string; password: string };
 
 export async function createTestUser(
-  options: { role?: UserRole; active?: boolean; scopes?: Partial<UserScopes>; password?: string } = {}
+  options: { role?: UserRole; active?: boolean; scopes?: Partial<UserScopes>; password?: string; username?: string; displayName?: string } = {}
 ): Promise<TestUser> {
-  const username = `u${randomBytes(5).toString("hex")}`;
+  const username = options.username ?? `u${randomBytes(5).toString("hex")}`;
   const password = options.password ?? `pw-${randomBytes(6).toString("hex")}`;
-  const user = await createUserWithActive(username, password, options.active ?? true, { role: options.role ?? "user" });
+  const user = await createUserWithActive(username, password, options.active ?? true, {
+    role: options.role ?? "user",
+    displayName: options.displayName,
+  });
   if (options.scopes) {
     await updateUserScopes(user.id, { calendar: false, tracker: false, ...options.scopes });
   }
-  return { id: user.id, username, password };
+  return { id: user.id, username: user.username, displayName: user.display_name, password };
 }
 
 export type CallOptions = {

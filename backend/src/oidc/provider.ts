@@ -63,7 +63,7 @@ export function createProvider(): Provider {
       iss: null,
       amr: null,
       openid: ["sub", "auth_time", "acr", "amr"],
-      profile: ["preferred_username", "role"],
+      profile: ["preferred_username", "name", "role"],
     },
     acrValues: [ACR_BASIC],
     routes: {
@@ -115,8 +115,15 @@ export function createProvider(): Provider {
       return {
         accountId: user.id,
         async claims(use) {
-          // role and username belong to the access token and /userinfo, not the ID token.
-          return { sub: user.id, ...(use === "userinfo" ? { preferred_username: user.username, role: user.role } : {}) };
+          // role and the names belong to the access token and /userinfo, not the ID token.
+          // preferred_username stays the canonical login identifier (lowercase);
+          // `name` is the display name, so apps can show the capitalization the user chose.
+          return {
+            sub: user.id,
+            ...(use === "userinfo"
+              ? { preferred_username: user.username, name: user.display_name || user.username, role: user.role }
+              : {}),
+          };
         },
       };
     },
@@ -131,7 +138,7 @@ export function createProvider(): Provider {
       const aud = (token as { aud?: string }).aud;
       const resource = Object.values(RESOURCE_SERVERS).find((entry) => entry.audience === aud);
       if (resource && !user.scopes[resource.audience]) throw new errors.InvalidGrant(`the account has no access to ${resource.audience}`);
-      return { type: "access", sid: (token as { sid?: string }).sid, username: user.username, role: user.role, scopes: user.scopes };
+      return { type: "access", sid: (token as { sid?: string }).sid, username: user.username, display_name: user.display_name || user.username, role: user.role, scopes: user.scopes };
     },
     features: {
       devInteractions: { enabled: false },

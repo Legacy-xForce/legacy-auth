@@ -16,6 +16,7 @@ const router = useRouter();
 const toast = useToastStore();
 
 const username = ref("");
+const displayName = ref("");
 const password = ref("");
 const role = ref<"admin" | "user">("user");
 const active = ref(true);
@@ -52,6 +53,7 @@ async function create() {
   try {
     const created = await api.post<User>("/admin/users", {
       username: username.value.trim(),
+      display_name: displayName.value.trim() || undefined,
       password: password.value,
       role: role.value,
       active: active.value,
@@ -66,7 +68,7 @@ async function create() {
         return;
       }
     }
-    toast.success(`${created.username} created`);
+    toast.success(`${created.display_name || created.username} created`);
     router.push({ name: "user-edit", params: { id: created.id } });
   } catch (err) {
     error.value = err instanceof Error ? err.message : "Failed to create user";
@@ -107,6 +109,20 @@ async function create() {
             data-bwignore="true"
             autofocus
           />
+          <p class="field-hint">Stored lowercase; it is the name they sign in with.</p>
+        </div>
+
+        <div class="field">
+          <label for="new-display-name">Display name</label>
+          <input
+            id="new-display-name"
+            v-model="displayName"
+            class="input"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="Defaults to the username as typed"
+          />
+          <p class="field-hint">Shown in the apps and in this console.</p>
         </div>
 
         <div class="field">

@@ -60,7 +60,7 @@ describe("discovery", () => {
     expect(doc.backchannel_logout_supported).toBe(true);
     expect(doc.backchannel_logout_session_supported).toBe(true);
     expect(doc.scopes_supported).toEqual(expect.arrayContaining(["openid", "profile", "offline_access", "calendar.read", "calendar.write", "tracker.read", "tracker.write", "admin"]));
-    expect(doc.claims_supported).toEqual(expect.arrayContaining(["sub", "sid", "auth_time", "amr", "acr", "preferred_username", "role"]));
+    expect(doc.claims_supported).toEqual(expect.arrayContaining(["sub", "sid", "auth_time", "amr", "acr", "preferred_username", "name", "role"]));
   });
 
   test("does not advertise features that are off", () => {
@@ -131,7 +131,7 @@ describe("authorization code + PKCE, end to end, from discovery alone", () => {
     const opToken = await redeem(app, client, signedIn.redirect!, second.verifier);
     const userinfo = await call(app, "GET", "/userinfo", { token: opToken.body.access_token });
     expect(userinfo.status).toBe(200);
-    expect(userinfo.body).toEqual({ sub: user.id, preferred_username: user.username, role: "admin" });
+    expect(userinfo.body).toEqual({ sub: user.id, preferred_username: user.username, name: user.displayName ?? user.username, role: "admin" });
   });
 });
 
@@ -168,6 +168,7 @@ describe("tokens", () => {
     const claims = verifyWithJwks(issued.tokens.body.access_token) as any;
     expect(claims.type).toBe("access");
     expect(claims.username).toBe(user.username);
+    expect(claims.display_name).toBe(user.displayName ?? user.username);
     expect(claims.role).toBe("admin");
     expect(claims.scopes).toEqual({ calendar: true, tracker: false });
   });
@@ -194,6 +195,8 @@ describe("tokens", () => {
     expect(claims.scopes).toBeUndefined();
     expect(claims.scope).toBeUndefined();
     expect(claims.username).toBeUndefined();
+    expect(claims.name).toBeUndefined();
+    expect(claims.display_name).toBeUndefined();
     expect(decode(issued.tokens.body.id_token).header).toMatchObject({ alg: "ES256", kid: getJwks().keys[0].kid });
   });
 
@@ -265,6 +268,16 @@ describe("sign-in rules", () => {
     expect(wrong.body.redirect).toBeUndefined();
     const right = await browser.signIn(start.interaction!, user, client);
     expect(right.redirect?.searchParams.get("code")).toBeString();
+  });
+
+  test("a username is case-insensitive at the sign-in page", async () => {
+    const user = await createTestUser({ scopes: both, username: "MixedCaseUser", displayName: "Mixed Case User" });
+    const client = await registerClient();
+    const browser = new Browser(app);
+    const start = await browser.authorize(client, { challenge: pkce().challenge });
+    const result = await browser.interactionCall(start.interaction!.uid, "login", { username: "MIXEDCASEUSER", password: user.password });
+    expect(result.status).toBe(200);
+    expect(result.body.redirect).toBeString();
   });
 
   test("a disabled account cannot sign in", async () => {

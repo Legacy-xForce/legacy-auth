@@ -58,8 +58,8 @@ async function logout() {
             aria-label="Account menu"
             @click="menuOpen = !menuOpen"
           >
-            <UserAvatar v-if="auth.user" :user-id="auth.user.id" :name="auth.user.username" :size="32" />
-            <span class="hidden max-w-40 truncate text-meta font-semibold sm:inline">{{ auth.user?.username }}</span>
+            <UserAvatar v-if="auth.user" :user-id="auth.user.id" :name="auth.user.display_name || auth.user.username" :size="32" />
+            <span class="hidden max-w-40 truncate text-meta font-semibold sm:inline">{{ auth.user?.display_name || auth.user?.username }}</span>
           </button>
 
           <Transition name="pop">
@@ -69,10 +69,10 @@ async function logout() {
               class="absolute top-[calc(100%+0.5rem)] right-0 z-40 w-64 origin-top-right rounded-2xl border border-line bg-overlay p-1.5 shadow-(--shadow-overlay)"
             >
               <div class="flex items-center gap-3 px-2.5 pt-2 pb-3">
-                <UserAvatar v-if="auth.user" :user-id="auth.user.id" :name="auth.user.username" :size="40" />
+                <UserAvatar v-if="auth.user" :user-id="auth.user.id" :name="auth.user.display_name || auth.user.username" :size="40" />
                 <div class="min-w-0">
-                  <div class="truncate text-body font-semibold">{{ auth.user?.username }}</div>
-                  <div class="text-meta text-muted">{{ auth.isAdmin ? "Administrator" : "Member" }}</div>
+                  <div class="truncate text-body font-semibold">{{ auth.user?.display_name || auth.user?.username }}</div>
+                  <div class="truncate text-meta text-muted">@{{ auth.user?.username }} · {{ auth.isAdmin ? "Administrator" : "Member" }}</div>
                 </div>
               </div>
               <div class="mx-1 mb-1.5 h-px bg-line" />

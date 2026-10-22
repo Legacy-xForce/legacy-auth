@@ -23,6 +23,7 @@ const toast = useToastStore();
 const user = ref<User | null>(null);
 const loadError = ref("");
 const username = ref("");
+const displayName = ref("");
 const role = ref<"admin" | "user">("user");
 const active = ref(true);
 const calendarScope = ref(false);
@@ -48,6 +49,7 @@ const dirty = computed(() => {
   if (!u) return false;
   return (
     username.value.trim() !== u.username ||
+    displayName.value.trim() !== u.display_name ||
     role.value !== u.role ||
     active.value !== u.active ||
     calendarScope.value !== u.scopes.calendar ||
@@ -59,6 +61,7 @@ const dirty = computed(() => {
 function applyUser(u: User) {
   user.value = u;
   username.value = u.username;
+  displayName.value = u.display_name;
   role.value = u.role;
   active.value = u.active;
   calendarScope.value = u.scopes.calendar;
@@ -112,6 +115,7 @@ async function save() {
   try {
     const payload: Record<string, unknown> = {
       username: username.value.trim(),
+      display_name: displayName.value.trim(),
       role: role.value,
       active: active.value,
       scopes: { calendar: calendarScope.value, tracker: trackerScope.value },
@@ -141,7 +145,7 @@ async function confirmDelete() {
   deleting.value = true;
   try {
     await api.delete(`/admin/users/${props.id}`);
-    toast.success(`${user.value?.username ?? "User"} deleted`);
+    toast.success(`${user.value?.display_name || user.value?.username || "User"} deleted`);
     router.push({ name: "users" });
   } catch (err) {
     error.value = err instanceof Error ? err.message : "Failed to delete user";
@@ -183,7 +187,7 @@ async function confirmDelete() {
           aria-label="Change profile picture"
           @click="triggerAvatarUpload"
         >
-          <UserAvatar :key="avatarVersion" :user-id="user.id" :name="user.username" :size="72" />
+          <UserAvatar :key="avatarVersion" :user-id="user.id" :name="user.display_name || user.username" :size="72" />
           <span
             class="absolute -right-0.5 -bottom-0.5 flex size-7 items-center justify-center rounded-full border-[3px] border-canvas bg-primary text-primary-contrast transition-transform group-hover:scale-110"
           >
@@ -192,7 +196,8 @@ async function confirmDelete() {
         </button>
         <input ref="avatarInput" type="file" accept="image/*" class="hidden" @change="onAvatarSelected" />
         <div class="min-w-0">
-          <h1 class="m-0 truncate text-display">{{ user.username }}</h1>
+          <h1 class="m-0 truncate text-display">{{ user.display_name || user.username }}</h1>
+          <p class="m-0 mt-0.5 truncate text-meta text-subtle">@{{ user.username }}</p>
           <div class="mt-1.5 flex flex-wrap items-center gap-2">
             <span v-if="user.role === 'admin'" class="chip bg-accent/12 text-accent">
               <Icon name="shieldCheck" :size="13" />
@@ -212,6 +217,13 @@ async function confirmDelete() {
           <div class="field">
             <label for="edit-username">Username</label>
             <input id="edit-username" v-model="username" class="input" autocapitalize="none" spellcheck="false" />
+            <p class="field-hint">Stored lowercase; it is the name they sign in with.</p>
+          </div>
+
+          <div class="field">
+            <label for="edit-display-name">Display name</label>
+            <input id="edit-display-name" v-model="displayName" class="input" spellcheck="false" />
+            <p class="field-hint">Shown in the apps and in this console.</p>
           </div>
 
           <div class="field">
@@ -304,7 +316,7 @@ async function confirmDelete() {
 
       <ConfirmDialog
         :open="confirmingDelete"
-        :title="`Delete ${user.username}?`"
+        :title="`Delete ${user.display_name || user.username}?`"
         message="The account is removed and signed out of every Legacy app. This can't be undone."
         confirm-label="Delete user"
         danger

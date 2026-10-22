@@ -11,6 +11,7 @@ export type UserScopes = {
 export type User = {
   id: string;
   username: string;
+  display_name: string;
   role: "admin" | "user";
   active: boolean;
   scopes: UserScopes;

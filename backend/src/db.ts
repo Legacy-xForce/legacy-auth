@@ -2,12 +2,13 @@ import { SQL } from "bun";
 import { UserRecord, RefreshTokenRecord, PasskeyCredentialRecord, UserRole, UserScopes } from "./types.ts";
 import { config } from "./config.ts";
 import { initOidcSchema } from "./oidc/schema.ts";
+import { displayNameFromInput, normalizeUsername } from "./usernames.ts";
 
 import { createHash } from "crypto";
 
 export const sql = new SQL(config.dbUrl);
 
-const USER_COLUMNS = "id, username, password_hash, role, active, scopes, created_at, updated_at";
+const USER_COLUMNS = "id, username, display_name, password_hash, role, active, scopes, created_at, updated_at";
 
 const DEFAULT_SCOPES: UserScopes = { calendar: false, tracker: false };
 
@@ -34,11 +35,56 @@ export async function initDatabase() {
       CREATE TABLE IF NOT EXISTS users (
         id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
         username text NOT NULL UNIQUE,
+        display_name text NOT NULL,
         password_hash text NOT NULL,
         active boolean NOT NULL DEFAULT true,
         created_at timestamptz NOT NULL DEFAULT now(),
         updated_at timestamptz NOT NULL DEFAULT now()
       );
+    `;
+
+    // Existing rows keep the name as it was typed in display_name, then the
+    // login identifier is lowercased. Rows whose lowercase form would collide
+    // with another account are left untouched; lookups match case-insensitively
+    // so they still sign in.
+    await bootstrapSql`
+      ALTER TABLE users
+      ADD COLUMN IF NOT EXISTS display_name text;
+    `;
+
+    await bootstrapSql`
+      UPDATE users
+      SET display_name = username
+      WHERE display_name IS NULL OR btrim(display_name) = '';
+    `;
+
+    await bootstrapSql`
+      UPDATE users AS target
+      SET username = lower(target.username)
+      WHERE target.username <> lower(target.username)
+        AND NOT EXISTS (
+          SELECT 1 FROM users AS other
+          WHERE other.id <> target.id
+            AND lower(other.username) = lower(target.username)
+        );
+    `;
+
+    // Case-insensitive duplicates would make the lookup ambiguous, so only add
+    // the index when the legacy data has none.
+    await bootstrapSql`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM users GROUP BY lower(username) HAVING count(*) > 1
+        ) THEN
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_lower ON users (lower(username));
+        END IF;
+      END $$;
+    `;
+
+    await bootstrapSql`
+      ALTER TABLE users
+      ALTER COLUMN display_name SET NOT NULL;
     `;
 
     await bootstrapSql`
@@ -139,18 +185,24 @@ export async function initDatabase() {
 }
 
 export async function findUserByUsername(username: string): Promise<UserRecord | null> {
+  const normalized = normalizeUsername(username);
   const result = await sql<UserRecord[]>`
     SELECT ${sql.unsafe(USER_COLUMNS)}
     FROM users
-    WHERE username = ${username}
+    WHERE lower(username) = ${normalized}
+    ORDER BY (username = ${normalized}) DESC, created_at ASC
     LIMIT 1;
   `;
   return normalizeUser(result[0]) ?? null;
 }
 
 export async function findUserActiveByUsername(username: string): Promise<Pick<UserRecord, "id" | "active"> | null> {
+  const normalized = normalizeUsername(username);
   const result = await sql<Pick<UserRecord, "id" | "active">[]>`
-    SELECT id, active FROM users WHERE username = ${username} LIMIT 1;
+    SELECT id, active FROM users
+    WHERE lower(username) = ${normalized}
+    ORDER BY (username = ${normalized}) DESC, created_at ASC
+    LIMIT 1;
   `;
   return result[0] ?? null;
 }
@@ -173,23 +225,43 @@ export async function createUserWithActive(
   username: string,
   password: string,
   active: boolean,
-  options: { role?: UserRole } = {}
+  options: { role?: UserRole; displayName?: string } = {}
 ): Promise<UserRecord> {
+  const typedUsername = displayNameFromInput(username);
+  const normalizedUsername = normalizeUsername(typedUsername);
+  const displayName = displayNameFromInput(options.displayName) || typedUsername || normalizedUsername;
+  if (!normalizedUsername) throw new Error("username is required");
+
+  // The expression index below is the real guard; this also covers a legacy
+  // database that had case-insensitive duplicates before the migration.
+  if (await findUserByUsername(normalizedUsername)) {
+    throw new Error('duplicate key value violates unique constraint "users_username_key"');
+  }
+
   const passwordHash = await Bun.password.hash(password);
   const role = options.role ?? "user";
   const result = await sql<UserRecord[]>`
-    INSERT INTO users (username, password_hash, active, role)
-    VALUES (${username}, ${passwordHash}, ${active}, ${role})
+    INSERT INTO users (username, display_name, password_hash, active, role)
+    VALUES (${normalizedUsername}, ${displayName}, ${passwordHash}, ${active}, ${role})
     RETURNING ${sql.unsafe(USER_COLUMNS)};
   `;
   return normalizeUser(result[0]);
 }
 
-export async function upsertUserWithPasswordHash(username: string, passwordHash: string, active: boolean): Promise<UserRecord> {
+export async function upsertUserWithPasswordHash(
+  username: string,
+  passwordHash: string,
+  active: boolean,
+  displayName?: string
+): Promise<UserRecord> {
+  const typedUsername = displayNameFromInput(username);
+  const normalizedUsername = normalizeUsername(typedUsername);
+  const name = displayNameFromInput(displayName) || typedUsername || normalizedUsername;
   const result = await sql<UserRecord[]>`
-    INSERT INTO users (username, password_hash, active)
-    VALUES (${username}, ${passwordHash}, ${active})
+    INSERT INTO users (username, display_name, password_hash, active)
+    VALUES (${normalizedUsername}, ${name}, ${passwordHash}, ${active})
     ON CONFLICT (username) DO UPDATE SET
+      display_name = EXCLUDED.display_name,
       password_hash = EXCLUDED.password_hash,
       active = EXCLUDED.active,
       updated_at = now()
@@ -222,6 +294,7 @@ export async function updateUserActive(userId: string, active: boolean): Promise
 
 export type UserProfileUpdate = {
   username?: string;
+  displayName?: string;
   role?: UserRole;
   active?: boolean;
 };
@@ -230,13 +303,23 @@ export async function updateUserProfile(userId: string, update: UserProfileUpdat
   const existing = await findUserById(userId);
   if (!existing) return null;
 
-  const username = update.username ?? existing.username;
+  // A new username also sets the display name to the name as typed, unless the
+  // caller sent one explicitly.
+  const typedUsername = displayNameFromInput(update.username) || existing.username;
+  const username = normalizeUsername(typedUsername);
+  const displayName =
+    update.displayName !== undefined
+      ? displayNameFromInput(update.displayName) || username
+      : update.username !== undefined
+        ? typedUsername || username
+        : existing.display_name;
   const role = update.role ?? existing.role;
   const active = update.active === undefined ? existing.active : update.active;
 
   const result = await sql<UserRecord[]>`
     UPDATE users
     SET username = ${username},
+        display_name = ${displayName},
         role = ${role},
         active = ${active},
         updated_at = now()
@@ -272,7 +355,7 @@ export async function listUsersPaginated(filters: UserListFilters): Promise<{ it
   const items = await sql<UserRecord[]>`
     SELECT ${sql.unsafe(USER_COLUMNS)}
     FROM users
-    WHERE (${searchPattern}::text IS NULL OR username ILIKE ${searchPattern})
+    WHERE (${searchPattern}::text IS NULL OR username ILIKE ${searchPattern} OR display_name ILIKE ${searchPattern})
       AND (${filters.role ?? null}::text IS NULL OR role = ${filters.role ?? null})
     ORDER BY lower(username) ASC
     LIMIT ${filters.pageSize} OFFSET ${offset};
@@ -281,7 +364,7 @@ export async function listUsersPaginated(filters: UserListFilters): Promise<{ it
   const countResult = await sql<{ count: string }[]>`
     SELECT COUNT(*)::text AS count
     FROM users
-    WHERE (${searchPattern}::text IS NULL OR username ILIKE ${searchPattern})
+    WHERE (${searchPattern}::text IS NULL OR username ILIKE ${searchPattern} OR display_name ILIKE ${searchPattern})
       AND (${filters.role ?? null}::text IS NULL OR role = ${filters.role ?? null});
   `;
 
@@ -294,7 +377,7 @@ export async function listUsersPaginated(filters: UserListFilters): Promise<{ it
 export async function deleteUserByUsername(username: string): Promise<void> {
   await sql`
     DELETE FROM users
-    WHERE username = ${username};
+    WHERE lower(username) = ${normalizeUsername(username)};
   `;
 }
 
@@ -420,7 +503,7 @@ export async function findPasskeyCredentialWithUser(
   const result = await sql<any[]>`
     SELECT
       c.id, c.user_id, c.public_key, c.counter, c.device_name, c.created_at,
-      u.id AS u_id, u.username, u.password_hash, u.role, u.active, u.scopes,
+      u.id AS u_id, u.username, u.display_name, u.password_hash, u.role, u.active, u.scopes,
       u.created_at AS u_created_at, u.updated_at AS u_updated_at
     FROM passkey_credentials c
     JOIN users u ON u.id = c.user_id
@@ -432,6 +515,7 @@ export async function findPasskeyCredentialWithUser(
   const user: UserRecord = normalizeUser({
     id: row.u_id,
     username: row.username,
+    display_name: row.display_name,
     password_hash: row.password_hash,
     role: row.role,
     active: row.active,
@@ -468,7 +552,7 @@ export async function findPasskeyCredentialsByUsername(
     SELECT c.id, c.user_id, c.public_key, c.counter, c.device_name, c.created_at
     FROM passkey_credentials c
     JOIN users u ON u.id = c.user_id
-    WHERE u.username = ${username}
+    WHERE lower(u.username) = ${normalizeUsername(username)}
     ORDER BY c.created_at DESC;
   `;
   return result;

@@ -13,7 +13,10 @@ export type AppAudience = (typeof APP_AUDIENCES)[number];
 
 export type UserRecord = {
   id: string;
+  // Canonical login identifier: trimmed and lowercased.
   username: string;
+  // Human-facing name, preserving the capitalization the user typed.
+  display_name: string;
   password_hash: string;
   role: UserRole;
   active: boolean;

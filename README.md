@@ -98,6 +98,8 @@ bun run user:add alice secret
 
 The script uses `DATABASE_URL`, hashes the password with Bun's password API, and inserts the user into the `users` table.
 
+Usernames are login identifiers: they are stored trimmed and lowercase, so `Alice`, `alice` and `ALICE` all sign in to the same account. The capitalization that was typed is kept as the user's **display name**. `bun run user:add Alice secret` therefore creates username `alice` with display name `Alice`. The console can change the display name independently; the admin API uses `display_name` for it.
+
 Users are created with `active = true` and `role = user` by default. Pass `--inactive` to create the account disabled from the start, or `--admin` to grant it access to the management console's admin API:
 
 ```bash
@@ -151,6 +153,7 @@ Payload:
 {
   "sub": "8f14e45f-ceea-467e-bb92-42f2c1e6b6d1",
   "username": "alice",
+  "display_name": "Alice",
   "role": "admin",
   "scopes": { "calendar": true, "tracker": false },
   "type": "access",
@@ -162,6 +165,8 @@ Payload:
 ```
 
 - `sub` — the user's id (UUID)
+- `username` — the canonical login identifier, always lowercase. Use it as an identifier, not as a label.
+- `display_name` — the name to show people, preserving capitalization. Optional for tokens issued before this claim existed.
 - `role` — `"admin"` or `"user"`
 - `scopes` — the same `{ calendar, tracker }` object exposed by the [Admin API](#admin-api), snapshotted at the time the token was issued
 - `type` — always `"access"` (refresh tokens, which are separate HS256 JWTs, use `"refresh"` and add a `jti`)
@@ -292,13 +297,13 @@ PASSKEY_ANDROID_APPS=com.legacy.legacytracker:AB:CD:...:EF
 
 All endpoints below require `Authorization: Bearer <access_token>` for a user with `role: "admin"` (create one with `bun run user:add ... --admin`), and return `403 Admin role required` otherwise.
 
-- `GET /admin/users?page=&pageSize=&q=&role=` — paginated user list. `q` matches username, `role` filters to `admin` or `user`.
-- `POST /admin/users` — create a user: `{ username, password, role?, active? }`.
+- `GET /admin/users?page=&pageSize=&q=&role=` — paginated user list. `q` matches username or display name, `role` filters to `admin` or `user`.
+- `POST /admin/users` — create a user: `{ username, display_name?, password, role?, active? }`. `username` is stored lowercase; `display_name` defaults to `username` as typed.
 - `GET /admin/users/:id` — fetch a single user.
-- `PATCH /admin/users/:id` — update a user: any of `{ username, role, active, password, scopes: { calendar, tracker } }`. Setting `password` revokes all of that user's refresh tokens. Setting `active: false` also revokes all sessions.
+- `PATCH /admin/users/:id` — update a user: any of `{ username, display_name, role, active, password, scopes: { calendar, tracker } }`. A new `username` also updates `display_name` to the name as typed unless `display_name` is sent too. Setting `password` revokes all of that user's refresh tokens. Setting `active: false` also revokes all sessions.
 - `POST /admin/users/:id/avatar` — `multipart/form-data` with a `file` field, same rules as `POST /auth/profile-picture` but on behalf of another user.
 
-Users carry a `role` (`admin` | `user`), an `active` flag, and a `scopes` object (`{ calendar, tracker }`) used to gate access to other internal apps. The auth service puts only the apps a user has a scope for in the token's `aud`; each app must still check `aud` (or `scopes`) itself. Both `role` and `scopes` are embedded in the [access token](#access-token) at login/refresh time, so downstream apps can read them straight off the verified JWT instead of calling the admin API, at the cost of the values being only as fresh as the user's last token refresh.
+Users carry a lowercase `username` (the login identifier), a `display_name` (the human-facing name), a `role` (`admin` | `user`), an `active` flag, and a `scopes` object (`{ calendar, tracker }`) used to gate access to other internal apps. The auth service puts only the apps a user has a scope for in the token's `aud`; each app must still check `aud` (or `scopes`) itself. Both `role` and `scopes` are embedded in the [access token](#access-token) at login/refresh time, so downstream apps can read them straight off the verified JWT instead of calling the admin API, at the cost of the values being only as fresh as the user's last token refresh.
 
 ### Throttling and audit log
 
@@ -323,7 +328,7 @@ Legacy Auth is an OpenID Provider built on [`node-oidc-provider`](https://github
 | `GET /.well-known/openid-configuration` | discovery |
 | `GET /authorize` | start a sign-in (Authorization Code + PKCE) |
 | `POST /token` | `authorization_code` and `refresh_token` grants; `client_secret_basic` for confidential clients, `none` for public ones |
-| `GET /userinfo` | `sub`, `preferred_username`, `role` (see the note below) |
+| `GET /userinfo` | `sub`, `preferred_username`, `name`, `role` (see the note below) |
 | `GET`/`POST /logout` | RP-initiated logout |
 | `GET /.well-known/jwks.json` | the key set, **unchanged**: tokens from the OP are signed with the key the legacy endpoints already use |
 
@@ -344,12 +349,14 @@ Scopes: `openid`, `profile`, `offline_access`, `admin` (admins only), and per ap
 ```json
 { "iss": "https://auth.legacy-group.tech", "aud": "calendar", "sub": "8f14e45f-…", "client_id": "calendar-web",
   "scope": "calendar.read calendar.write", "sid": "…", "jti": "…", "iat": 1783774116, "exp": 1783775016,
-  "type": "access", "username": "alice", "role": "admin", "scopes": { "calendar": true, "tracker": false } }
+  "type": "access", "username": "alice", "display_name": "Alice", "role": "admin", "scopes": { "calendar": true, "tracker": false } }
 ```
 
-`type` and `scopes` are the legacy claims the calendar and tracker check today, kept so they need no change to accept these tokens. `aud` is the plain app name they already pin, not the resource indicator. Each app must still check `iss`, `aud`, and a scope. Role and scopes are re-read from the user every time a token is issued, refreshes included, and a refresh fails with `invalid_grant` once the user has lost the app's scope or was disabled.
+`type` and `scopes` are the legacy claims the calendar and tracker check today, kept so they need no change to accept these tokens. `username` is the canonical lowercase identifier; `display_name` is the name to show (additive, so older consumers are unaffected). `aud` is the plain app name they already pin, not the resource indicator. Each app must still check `iss`, `aud`, and a scope. Role and scopes are re-read from the user every time a token is issued, refreshes included, and a refresh fails with `invalid_grant` once the user has lost the app's scope or was disabled.
 
-**ID token**: `iss`, `aud` (the client), `sub`, `nonce`, `auth_time`, `sid`, `acr` (`urn:legacy:loa:1`) and `amr` (`["pwd"]` for a password, `["webauthn"]` for a passkey), so a policy can require passkeys later. No `role`, no `scopes`.
+**ID token**: `iss`, `aud` (the client), `sub`, `nonce`, `auth_time`, `sid`, `acr` (`urn:legacy:loa:1`) and `amr` (`["pwd"]` for a password, `["webauthn"]` for a passkey), so a policy can require passkeys later. No `role`, no `scopes`, no names.
+
+**Usernames and display names**: every `username` / `preferred_username` this service issues is the canonical lowercase login identifier. Tokens minted before this change keep the old spelling until they expire. `name` (userinfo) and `display_name` (legacy access token) carry the display name. Apps must key accounts on `sub`, not on the username. The calendar already uses `sub` as `authId`, but its first-link fallback looks a local account up by exact username; after this migration an unlinked local `Alice` row will not match `alice`, so it may provision a separate account instead of linking the existing one. The tracker chooses its label from `preferred_username`/`username` before `name`, so it will show the lowercase login name until it prefers `name`/`display_name`. Sign-in and authorization keep working for linked accounts; these are linking and display follow-ups. Existing mixed-case usernames are migrated: `display_name` is filled with the old spelling first, then the username is lowercased. A legacy case-insensitive duplicate is left untouched so the migration cannot merge two accounts; lookups still match it case-insensitively.
 
 **Differences from what the issue sketched**, each forced by the library or a deliberate tightening:
 
@@ -433,7 +440,7 @@ The raw OpenAPI document is available at:
 
 ## Frontend
 
-The console (`frontend/`) is a Vue 3 + Vite SPA. It talks to the backend over the API described above, using `VITE_API_URL` (empty/same-origin by default) as the base URL. Non-admin users only see the Settings page (avatar, username, password); the Users section requires the `admin` role.
+The console (`frontend/`) is a Vue 3 + Vite SPA. It talks to the backend over the API described above, using `VITE_API_URL` (empty/same-origin by default) as the base URL. Non-admin users only see the Settings page (avatar, display name, username, password); the Users section requires the `admin` role.
 
 ## Docker
 

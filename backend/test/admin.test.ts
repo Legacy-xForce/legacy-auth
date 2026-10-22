@@ -51,12 +51,50 @@ describe("users", () => {
     const username = `created${Math.random().toString(16).slice(2, 8)}`;
     const created = await call(app, "POST", "/admin/users", { token: adminToken, json: { username, password: "initial-pw", role: "user" } });
     expect(created.status).toBe(201);
-    expect(created.body).toMatchObject({ username, role: "user", active: true, scopes: { calendar: false, tracker: false } });
+    expect(created.body).toMatchObject({ username, display_name: username, role: "user", active: true, scopes: { calendar: false, tracker: false } });
     expect(created.body.password_hash).toBeUndefined();
     expect((await login(app, { id: created.body.id, username, password: "initial-pw" })).status).toBe(200);
 
     const dup = await call(app, "POST", "/admin/users", { token: adminToken, json: { username, password: "other" } });
     expect(dup.status).toBe(409);
+  });
+
+  test("lowercases usernames while keeping the typed name as the display name", async () => {
+    const tag = Math.random().toString(16).slice(2, 8);
+    const typed = `NewPerson-${tag}`;
+    const created = await call(app, "POST", "/admin/users", {
+      token: adminToken,
+      json: { username: typed, display_name: "New Person", password: "case-pw" },
+    });
+    expect(created.status).toBe(201);
+    expect(created.body.username).toBe(typed.toLowerCase());
+    expect(created.body.display_name).toBe("New Person");
+
+    // Signing in works with any capitalization, but the token keeps the canonical name.
+    const signedIn = await login(app, { id: created.body.id, username: typed.toUpperCase(), password: "case-pw" });
+    expect(signedIn.status).toBe(200);
+    expect(verifyWithJwks(signedIn.body.access_token)).toMatchObject({ username: typed.toLowerCase(), display_name: "New Person" });
+
+    // The same account cannot be created again under another casing.
+    const dup = await call(app, "POST", "/admin/users", { token: adminToken, json: { username: typed.toLowerCase(), password: "other" } });
+    expect(dup.status).toBe(409);
+
+    // Renaming without an explicit display name adopts the capitalization typed for the new username.
+    const renamed = await call(app, "PATCH", `/admin/users/${created.body.id}`, {
+      token: adminToken,
+      json: { username: `Renamed-${tag}` },
+    });
+    expect(renamed.body).toMatchObject({ username: `renamed-${tag}`, display_name: `Renamed-${tag}` });
+  });
+
+  test("an admin can change only the display name", async () => {
+    const user = await createTestUser();
+    const changed = await call(app, "PATCH", `/admin/users/${user.id}`, {
+      token: adminToken,
+      json: { display_name: "A Friendlier Name" },
+    });
+    expect(changed.body).toMatchObject({ username: user.username, display_name: "A Friendlier Name" });
+    expect((await login(app, user)).body.access_token).toBeString();
   });
 
   test("validates required fields", async () => {
@@ -133,9 +171,11 @@ describe("own profile and avatars", () => {
   test("GET/PATCH /auth/me", async () => {
     const user = await createTestUser();
     const token = (await loginOk(app, user)).access_token;
-    expect((await call(app, "GET", "/auth/me", { token })).body.username).toBe(user.username);
+    expect((await call(app, "GET", "/auth/me", { token })).body).toMatchObject({ username: user.username, display_name: user.displayName ?? user.username });
     const fresh = `me${Math.random().toString(16).slice(2, 8)}`;
     expect((await call(app, "PATCH", "/auth/me", { token, json: { username: fresh } })).body.username).toBe(fresh);
+    const display = await call(app, "PATCH", "/auth/me", { token, json: { display_name: "My Name" } });
+    expect(display.body).toMatchObject({ username: fresh, display_name: "My Name" });
   });
 
   test("a user cannot raise their own role or scopes through /auth/me", async () => {

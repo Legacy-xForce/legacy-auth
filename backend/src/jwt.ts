@@ -7,6 +7,7 @@ import { APP_AUDIENCES, AppAudience, UserRole, UserScopes } from "./types.ts";
 export type AccessTokenPayload = {
   sub: string;
   username: string;
+  display_name?: string;
   role: UserRole;
   scopes: UserScopes;
   type: "access";
@@ -58,11 +59,12 @@ export function resolveAudience(requested: unknown, scopes: UserScopes, options:
   return [app];
 }
 
-export function signAccessToken(payload: { sub: string; username: string; role: UserRole; scopes: UserScopes; audience: AppAudience[] }) {
+export function signAccessToken(payload: { sub: string; username: string; displayName?: string; role: UserRole; scopes: UserScopes; audience: AppAudience[] }) {
   return jwt.sign(
     {
       sub: payload.sub,
       username: payload.username,
+      ...(payload.displayName ? { display_name: payload.displayName } : {}),
       role: payload.role,
       scopes: payload.scopes,
       type: "access",

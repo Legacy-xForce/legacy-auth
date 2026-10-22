@@ -96,7 +96,7 @@ export async function generateRegisterOptions(user: UserRecord) {
     user: {
       id: Buffer.from(user.id).toString("base64url"),
       name: user.username,
-      displayName: user.username,
+      displayName: user.display_name || user.username,
     },
     pubKeyCredParams: [
       { alg: -7, type: "public-key" }, // ES256
@@ -268,6 +268,7 @@ export async function verifyLogin(dto: PasskeyLoginVerifyPayload) {
   const accessToken = signAccessToken({
     sub: user.id,
     username: user.username,
+    displayName: user.display_name,
     role: user.role,
     scopes: user.scopes,
     audience,
@@ -283,6 +284,7 @@ export async function verifyLogin(dto: PasskeyLoginVerifyPayload) {
     user: {
       id: user.id,
       username: user.username,
+      display_name: user.display_name,
       role: user.role,
       active: user.active,
       scopes: user.scopes,

@@ -10,6 +10,7 @@ import { checkPasswordLogin } from "./credentials.ts";
 import { ACR_BASIC } from "./provider.ts";
 import { errorPage, STATIC_PAGE_CSP } from "./pages.ts";
 import { ADMIN_SCOPE, entitledResourceScopes, mayUseAdminScope, RESOURCE_SERVERS } from "./scopes.ts";
+import { normalizeUsername } from "../usernames.ts";
 
 /**
  * The sign-in screens the provider redirects to (`/interaction/:uid`).
@@ -256,7 +257,7 @@ export function createInteractionHandler(provider: Provider) {
     }
 
     if (action === "passkey/options") {
-      const username = typeof body.username === "string" && body.username.trim() ? body.username.trim() : undefined;
+      const username = typeof body.username === "string" && body.username.trim() ? normalizeUsername(body.username) : undefined;
       send(res, 200, await generateLoginOptions(username));
       return true;
     }
@@ -272,7 +273,7 @@ export function createInteractionHandler(provider: Provider) {
     };
 
     if (action === "login") {
-      const username = typeof body.username === "string" ? body.username.trim() : "";
+      const username = normalizeUsername(body.username);
       const password = typeof body.password === "string" ? body.password : "";
       if (!username || !password || username.length > 200 || password.length > 1024) {
         send(res, 400, { error: "username and password are required" });

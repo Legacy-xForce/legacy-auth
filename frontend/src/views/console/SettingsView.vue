@@ -16,9 +16,14 @@ const auth = useAuthStore();
 const toast = useToastStore();
 
 const username = ref(auth.user?.username ?? "");
-const usernameSaving = ref(false);
-const usernameError = ref("");
-const usernameChanged = computed(() => Boolean(username.value.trim()) && username.value.trim() !== auth.user?.username);
+const displayName = ref(auth.user?.display_name ?? "");
+const profileSaving = ref(false);
+const profileError = ref("");
+const profileChanged = computed(
+  () =>
+    (Boolean(username.value.trim()) && username.value.trim().toLowerCase() !== auth.user?.username) ||
+    (Boolean(displayName.value.trim()) && displayName.value.trim() !== auth.user?.display_name)
+);
 
 const currentPassword = ref("");
 const newPassword = ref("");
@@ -50,17 +55,22 @@ onMounted(async () => {
   }
 });
 
-async function saveUsername() {
-  usernameError.value = "";
-  usernameSaving.value = true;
+async function saveProfile() {
+  profileError.value = "";
+  profileSaving.value = true;
   try {
-    await api.patch("/auth/me", { username: username.value.trim() });
+    await api.patch("/auth/me", {
+      username: username.value.trim(),
+      display_name: displayName.value.trim(),
+    });
     await auth.fetchMe();
-    toast.success("Username updated");
+    username.value = auth.user?.username ?? "";
+    displayName.value = auth.user?.display_name ?? "";
+    toast.success("Profile updated");
   } catch (err) {
-    usernameError.value = err instanceof Error ? err.message : "Failed to update username";
+    profileError.value = err instanceof Error ? err.message : "Failed to update profile";
   } finally {
-    usernameSaving.value = false;
+    profileSaving.value = false;
   }
 }
 
@@ -174,7 +184,7 @@ function formatDate(value: string) {
         aria-label="Change profile picture"
         @click="triggerAvatarUpload"
       >
-        <UserAvatar v-if="auth.user" :key="avatarVersion" :user-id="auth.user.id" :name="auth.user.username" :size="72" />
+        <UserAvatar v-if="auth.user" :key="avatarVersion" :user-id="auth.user.id" :name="auth.user.display_name || auth.user.username" :size="72" />
         <span
           class="absolute -right-0.5 -bottom-0.5 flex size-7 items-center justify-center rounded-full border-[3px] border-canvas bg-primary text-primary-contrast transition-transform group-hover:scale-110"
         >
@@ -183,8 +193,8 @@ function formatDate(value: string) {
       </button>
       <input ref="avatarInput" type="file" accept="image/*" class="hidden" @change="onAvatarSelected" />
       <div class="min-w-0">
-        <h1 class="m-0 truncate text-display">{{ auth.user?.username }}</h1>
-        <p class="m-0 mt-0.5 text-meta text-muted">{{ auth.isAdmin ? "Administrator" : "Member" }} · Legacy account</p>
+        <h1 class="m-0 truncate text-display">{{ auth.user?.display_name || auth.user?.username }}</h1>
+        <p class="m-0 mt-0.5 text-meta text-muted">@{{ auth.user?.username }} · {{ auth.isAdmin ? "Administrator" : "Member" }} · Legacy account</p>
       </div>
     </header>
 
@@ -200,19 +210,24 @@ function formatDate(value: string) {
 
     <section class="flex flex-col gap-3" aria-labelledby="profile-heading">
       <h2 id="profile-heading" class="eyebrow m-0">Profile</h2>
-      <form class="card flex flex-col gap-4 p-5 sm:p-6" novalidate @submit.prevent="saveUsername">
+      <form class="card flex flex-col gap-4 p-5 sm:p-6" novalidate @submit.prevent="saveProfile">
+        <div class="field">
+          <label for="settings-display-name">Display name</label>
+          <input id="settings-display-name" v-model="displayName" class="input" autocomplete="name" spellcheck="false" />
+          <p class="field-hint">How your name appears in the Legacy apps.</p>
+        </div>
         <div class="field">
           <label for="settings-username">Username</label>
-          <div class="flex gap-2">
-            <input id="settings-username" v-model="username" class="input min-w-0 flex-1" autocomplete="username" autocapitalize="none" spellcheck="false" />
-            <button type="submit" class="btn btn-primary h-11 shrink-0" :disabled="usernameSaving || !usernameChanged">
-              <Icon v-if="usernameSaving" name="loader" :size="16" />
-              {{ usernameSaving ? "Saving…" : "Save" }}
-            </button>
-          </div>
-          <p class="field-hint">You sign in to every Legacy app with this name.</p>
+          <input id="settings-username" v-model="username" class="input min-w-0 flex-1" autocomplete="username" autocapitalize="none" spellcheck="false" />
+          <p class="field-hint">Stored lowercase. You sign in to every Legacy app with this name.</p>
         </div>
-        <FormAlert v-if="usernameError">{{ usernameError }}</FormAlert>
+        <FormAlert v-if="profileError">{{ profileError }}</FormAlert>
+        <div class="flex justify-end">
+          <button type="submit" class="btn btn-primary h-11 shrink-0" :disabled="profileSaving || !profileChanged">
+            <Icon v-if="profileSaving" name="loader" :size="16" />
+            {{ profileSaving ? "Saving…" : "Save" }}
+          </button>
+        </div>
       </form>
     </section>
 
