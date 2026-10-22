@@ -76,15 +76,6 @@ async function logout() {
                 </div>
               </div>
               <div class="mx-1 mb-1.5 h-px bg-line" />
-              <RouterLink
-                :to="{ name: 'settings' }"
-                role="menuitem"
-                class="flex h-10 items-center gap-3 rounded-[10px] px-2.5 text-meta font-medium text-fg no-underline hover:bg-fg/6"
-                @click="menuOpen = false"
-              >
-                <Icon name="settings" :size="16" class="text-muted" />
-                Account settings
-              </RouterLink>
               <button
                 type="button"
                 role="menuitem"
