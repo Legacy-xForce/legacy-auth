@@ -41,6 +41,11 @@ WORKDIR /app/backend
 
 VOLUME ["/app/backend/data/avatars"]
 
-EXPOSE 4000
+EXPOSE 3000
+
+# Coolify uses the image HEALTHCHECK to gate deployments and mark the
+# container healthy. All legacy containers listen on 3000.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD bun -e "fetch('http://127.0.0.1:3000/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
 
 CMD ["bun", "run", "src/index.ts"]

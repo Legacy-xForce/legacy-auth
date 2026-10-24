@@ -64,6 +64,9 @@ async function route(request: Request): Promise<Response> {
     if (request.method === "OPTIONS" && !oidc.handles(url.pathname)) {
       return createCorsPreflightResponse(request);
     }
+    if (request.method === "GET" && url.pathname === "/health") {
+      return new Response(JSON.stringify({ status: "ok" }), { status: 200, headers: withCorsHeaders(jsonHeaders) });
+    }
     if (request.method === "GET" && url.pathname === "/openapi.json") {
       return new Response(JSON.stringify(openApiDocument), { status: 200, headers: withCorsHeaders(jsonHeaders) });
     }

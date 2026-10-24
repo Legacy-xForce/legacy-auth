@@ -2,7 +2,7 @@
 const DEFAULT_AUDIT_RETENTION_DAYS = 180;
 
 export const config = {
-  port: Number(process.env.PORT ?? 4000),
+  port: Number(process.env.PORT ?? 3000),
   dbUrl: process.env.DATABASE_URL ?? "postgres://postgres:postgres@localhost:5432/legacy_auth",
   jwtSecret: process.env.JWT_SECRET ?? "replace-with-strong-secret",
   jwtPrivateKeyPem: process.env.JWT_PRIVATE_KEY,

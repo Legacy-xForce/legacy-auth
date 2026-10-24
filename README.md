@@ -59,7 +59,7 @@ Optional environment variables:
 - `OIDC_BACKCHANNEL_RETRY_DELAYS_MS` (default: `5000,30000,120000,600000,3600000`) and `OIDC_BACKCHANNEL_POLL_MS` (default: `2000`) - back-channel logout retries.
 - `OIDC_NATIVE_REFRESH_IDLE_SECONDS` (default: `2592000`, 30 days) and `OIDC_NATIVE_GRANT_SECONDS` (default: `15552000`, 180 days) - how long a native app's refresh token lives unused, and how long after sign-in its grant ends. Web clients keep `REFRESH_TOKEN_TTL_SECONDS`.
 - `OIDC_ALLOW_INTERNAL_BACKCHANNEL` (default: `true` outside production, `false` in it) - whether a client's back-channel logout URI may point at localhost or a private network.
-- `PORT` (default: `4000`)
+- `PORT` (default: `3000`)
 - `ACCESS_TOKEN_TTL_SECONDS` (default: `900`)
 - `REFRESH_TOKEN_TTL_SECONDS` (default: `2592000`)
 - `REFRESH_REUSE_GRACE_SECONDS` (default: `30`) - how long a rotated refresh token can still be refreshed (see [Refresh](#refresh))
@@ -446,7 +446,7 @@ The console (`frontend/`) is a Vue 3 + Vite SPA. It talks to the backend over th
 
 ```bash
 docker build -t legacy-auth .
-docker run -p 4000:4000 --env-file backend/.env legacy-auth
+docker run -p 3000:3000 --env-file backend/.env legacy-auth
 ```
 
-The Dockerfile builds the frontend in one stage and copies the static output into the backend runtime image (`FRONTEND_DIST_DIR=/app/frontend/dist`), so the container serves both the API and the console on port `4000` — there's nothing else to expose or run separately. Profile picture uploads are persisted via a volume at `/app/backend/data/avatars`.
+The Dockerfile builds the frontend in one stage and copies the static output into the backend runtime image (`FRONTEND_DIST_DIR=/app/frontend/dist`), so the container serves both the API and the console on port `3000` — there's nothing else to expose or run separately. The image exposes `/health` and defines a `HEALTHCHECK`, which is what Coolify uses to decide when a deployment is healthy. Profile picture uploads are persisted via a volume at `/app/backend/data/avatars`.
