@@ -210,10 +210,14 @@ describe("redirect_uri", () => {
     ["a different path", "https://exact.test.local/auth/callback/extra"],
     ["a parent path", "https://exact.test.local/auth"],
     ["a suffix on the host", "https://exact.test.local.evil.example/auth/callback"],
-    ["a subdomain", "https://x.exact.test.local/auth/callback"],
+    ["a parent domain", "https://test.local/auth/callback"],
+    ["a host that merely ends with the registered name", "https://evilexact.test.local/auth/callback"],
+    ["a different port", "https://exact.test.local:8443/auth/callback"],
     ["another scheme", "http://exact.test.local/auth/callback"],
     ["a different case", "https://EXACT.test.local/AUTH/callback"],
     ["an added query", "https://exact.test.local/auth/callback?next=https://evil.example"],
+    ["an added query on a subdomain", "https://x.exact.test.local/auth/callback?next=https://evil.example"],
+    ["a path traversal on a subdomain", "https://x.exact.test.local/auth/../auth/callback"],
     ["an added fragment", "https://exact.test.local/auth/callback#x"],
     ["a userinfo trick", "https://exact.test.local@evil.example/auth/callback"],
     ["a path traversal", "https://exact.test.local/auth/../auth/callback"],
@@ -231,6 +235,13 @@ describe("redirect_uri", () => {
     expect(response.status).toBe(303);
   });
 
+  test("the same path on a subdomain is accepted, at any depth", async () => {
+    for (const uri of ["https://preview.exact.test.local/auth/callback", "https://a.b.exact.test.local/auth/callback"]) {
+      const response = await new Browser(app).request(authorizeUrl(client, { redirect_uri: uri }));
+      expect(response.status).toBe(303);
+    }
+  });
+
   test("an unknown client_id is refused without redirecting", async () => {
     const response = await new Browser(app).request(authorizeUrl({ ...client, id: "no-such-client" }));
     expect(response.status).toBe(400);
@@ -246,6 +257,19 @@ describe("redirect_uri", () => {
     );
     expect(response.status).toBe(400);
     expect(response.headers.get("location")).toBeNull();
+  });
+
+  test("a logout redirect to a subdomain of a registered one is allowed", async () => {
+    const user = await createTestUser({ scopes: both });
+    const browser = new Browser(app);
+    const { tokens } = await signInAndRedeem(app, browser, client, user);
+    const target = new URL(client.logoutRedirect!);
+    target.hostname = `preview.${target.hostname}`;
+    const response = await browser.request(
+      `${ISSUER_ORIGIN}/logout?${new URLSearchParams({ id_token_hint: tokens.body.id_token, post_logout_redirect_uri: target.toString(), state: "x" })}`
+    );
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("op.logoutForm");
   });
 });
 

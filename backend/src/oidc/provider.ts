@@ -5,7 +5,7 @@ import { findUserById } from "../db.ts";
 import { UUID_PATTERN } from "../avatars.ts";
 import { getKid, getPrivateKey } from "../keys.ts";
 import { PostgresAdapter } from "./adapter.ts";
-import { EXTRA_CLIENT_PROPERTIES, secretMatchesHash } from "./clients.ts";
+import { EXTRA_CLIENT_PROPERTIES, redirectUriAllowed, secretMatchesHash } from "./clients.ts";
 import { assertPublicTarget } from "./net-safety.ts";
 import { errorPage, LOGOUT_CSP, logoutPage, signedOutPage, STATIC_PAGE_CSP } from "./pages.ts";
 import { entitledResourceScopes, RESOURCE_SERVERS, resourcesForScopes, SUPPORTED_SCOPES } from "./scopes.ts";
@@ -203,6 +203,7 @@ export function createProvider(): Provider {
   provider.proxy = true;
   patchClientSecretComparison(provider);
   patchBackchannelLogout(provider);
+  patchRedirectUriMatching(provider);
   patchSessionIds(provider);
   strictAuthorizationRequests(provider);
   return provider;
@@ -297,6 +298,28 @@ function patchClientSecretComparison(provider: Provider) {
     const previousHash: string | undefined = this.legacy_previous_secret_hash;
     const previousExpiry = Number(this.legacy_previous_secret_expires_at);
     return Boolean(previousHash) && previousExpiry > Date.now() / 1000 && secretMatchesHash(presented, previousHash);
+  };
+}
+
+/**
+ * The library matches redirect URIs exactly. A web app also has to be able to
+ * come back to a preview deployment on a subdomain of a registered host
+ * (legacy-auth#14), so a subdomain of a registered URI is allowed as well. The
+ * library's own rule stays in place: it accepts a different loopback port for a
+ * native client, and that is not something to lose.
+ *
+ * A test pins this: if a library upgrade renames either method, previews stop
+ * signing in rather than an unregistered URI starting to work.
+ */
+function patchRedirectUriMatching(provider: Provider) {
+  const proto = (provider as any).Client.prototype;
+  const redirectUriMatches = proto.redirectUriAllowed;
+  const postLogoutRedirectUriMatches = proto.postLogoutRedirectUriAllowed;
+  proto.redirectUriAllowed = function (this: any, value: string) {
+    return redirectUriMatches.call(this, value) || redirectUriAllowed(value, this.redirectUris);
+  };
+  proto.postLogoutRedirectUriAllowed = function (this: any, value: string) {
+    return postLogoutRedirectUriMatches.call(this, value) || redirectUriAllowed(value, this.postLogoutRedirectUris);
   };
 }
 

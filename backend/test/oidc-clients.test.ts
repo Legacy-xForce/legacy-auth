@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { config } from "../src/config.ts";
-import { ClientValidationError, ensureDefaultClients, generateClientSecret, hashClientSecret, secretMatchesHash, validateClientFields } from "../src/oidc/clients.ts";
+import { ClientValidationError, ensureDefaultClients, generateClientSecret, hashClientSecret, redirectUriAllowed, secretMatchesHash, validateClientFields } from "../src/oidc/clients.ts";
 import { call, createTestUser, loginOk, startApp, testSql, type TestApp } from "./helpers.ts";
 import { Browser, ISSUER_ORIGIN, basicAuth, pkce, refreshRequest, registerClient, signInAndRedeem, tokenRequest, useStubFrontend } from "./oidc-helpers.ts";
 
@@ -554,5 +554,49 @@ describe("secrets and validation, as plain functions", () => {
     const current = validateClientFields(base() as any);
     expect(validateClientFields({ name: "New" }, current).redirect_uris).toEqual(current.redirect_uris);
     expect(() => validateClientFields({ name: "" }, current)).toThrow(ClientValidationError);
+  });
+});
+
+describe("redirect URI matching", () => {
+  const registered = ["https://legacy-calendar.pages.dev/callback", "http://localhost:5173/cb", "com.example.app:/cb"];
+
+  test("accepts a registered URI exactly", () => {
+    for (const uri of registered) expect(redirectUriAllowed(uri, registered)).toBe(true);
+  });
+
+  test("accepts the same path and query on a subdomain, at any depth", () => {
+    expect(redirectUriAllowed("https://feature-x.legacy-calendar.pages.dev/callback", registered)).toBe(true);
+    expect(redirectUriAllowed("https://a.b.legacy-calendar.pages.dev/callback", registered)).toBe(true);
+    expect(redirectUriAllowed("http://preview.localhost:5173/cb", registered)).toBe(true);
+  });
+
+  test("does not accept a parent, a lookalike, or a different path, query, port or scheme", () => {
+    for (const uri of [
+      "https://pages.dev/callback",
+      "https://evillegacy-calendar.pages.dev/callback",
+      "https://legacy-calendar.pages.dev.evil.example/callback",
+      "https://feature-x.legacy-calendar.pages.dev/callback/extra",
+      "https://feature-x.legacy-calendar.pages.dev/callback?next=evil",
+      "https://feature-x.legacy-calendar.pages.dev:8443/callback",
+      "http://feature-x.legacy-calendar.pages.dev/callback",
+      "https://feature-x.legacy-calendar.pages.dev/auth/../callback",
+      "https://feature-x.legacy-calendar.pages.dev/callback#x",
+      "https://user:pass@feature-x.legacy-calendar.pages.dev/callback",
+    ]) {
+      expect(redirectUriAllowed(uri, registered)).toBe(false);
+    }
+  });
+
+  test("never treats an IP address as a domain with subdomains", () => {
+    expect(redirectUriAllowed("https://1.2.3.4/cb", ["https://1.2.3.4/cb"])).toBe(true);
+    expect(redirectUriAllowed("https://x.1.2.3.4/cb", ["https://1.2.3.4/cb"])).toBe(false);
+    expect(redirectUriAllowed("https://[::1]/cb", ["https://[::1]/cb"])).toBe(true);
+    expect(redirectUriAllowed("https://x.[::1]/cb", ["https://[::1]/cb"])).toBe(false);
+  });
+
+  test("has no subdomains on a custom scheme, and tolerates a missing list", () => {
+    expect(redirectUriAllowed("com.example.app:/cb", registered)).toBe(true);
+    expect(redirectUriAllowed("something.com.example.app:/cb", registered)).toBe(false);
+    expect(redirectUriAllowed("https://example.test/cb", undefined)).toBe(false);
   });
 });
