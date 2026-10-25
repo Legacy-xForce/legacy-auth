@@ -358,7 +358,7 @@ export function createOpenApiDocument(): OpenApiDocument {
           tags: ["OpenID Provider"],
           summary: "Start a sign-in (Authorization Code with PKCE)",
           description:
-            "Redirects the browser to the sign-in page when there is no session, and to `redirect_uri` with a `code` when there is. `redirect_uri` is required and must match a registered URI, or the same path on a subdomain of a registered web URI; an unregistered one gets an error page, never a redirect. `nonce` is required with the `openid` scope. `offline_access` only takes effect with `prompt=consent`, which is automatic and shows no screen. A request the user may not make comes back as `error=access_denied`.",
+            "Redirects the browser to the sign-in page when there is no session, and to `redirect_uri` with a `code` when there is. `redirect_uri` is required and must match a registered URI exactly; an unregistered one gets an error page, never a redirect. `nonce` is required with the `openid` scope. `offline_access` only takes effect with `prompt=consent`, which is automatic and shows no screen. A request the user may not make comes back as `error=access_denied`.",
           parameters: [
             { name: "response_type", in: "query", required: true, schema: { type: "string", enum: ["code"] } },
             { name: "client_id", in: "query", required: true, schema: { type: "string" } },
@@ -642,7 +642,7 @@ export function createOpenApiDocument(): OpenApiDocument {
             client_id: { type: "string", pattern: "^[a-z0-9][a-z0-9._-]{1,62}$" },
             name: { type: "string" },
             is_public: { type: "boolean" },
-            redirect_uris: { type: "array", items: { type: "string" }, description: "Matched exactly, except that a web URI also authorizes the same path and query on any subdomain of its host (for preview deployments). https, or http on localhost; a custom scheme only for a public client. No wildcards or fragments." },
+            redirect_uris: { type: "array", items: { type: "string" }, description: "Matched exactly. https, or http on localhost; a custom scheme only for a public client. No wildcards or fragments." },
             post_logout_redirect_uris: { type: "array", items: { type: "string" } },
             backchannel_logout_uri: { type: "string", nullable: true, description: "Confidential clients only; may not point at a private network in production." },
             allowed_scopes: { type: "array", items: { type: "string" }, description: "Must include `openid`." },
