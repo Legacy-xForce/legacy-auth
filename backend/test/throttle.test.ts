@@ -1,6 +1,6 @@
-import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { config } from "../src/config.ts";
-import { isPrivateAddress } from "../src/throttle.ts";
+import { isPrivateAddress, resetThrottleWindows } from "../src/throttle.ts";
 import { call, createTestUser, fromIp, login, startApp, type TestApp } from "./helpers.ts";
 
 let app: TestApp;
@@ -9,7 +9,13 @@ const original = { max: config.loginMaxFailures, proxy: config.trustProxy };
 beforeAll(() => {
   app = startApp();
 });
-afterAll(() => app.stop());
+afterAll(() => {
+  app.stop();
+  resetThrottleWindows();
+});
+beforeEach(() => {
+  resetThrottleWindows();
+});
 afterEach(() => {
   config.loginMaxFailures = original.max;
   config.trustProxy = original.proxy;

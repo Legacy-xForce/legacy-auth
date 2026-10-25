@@ -1,5 +1,6 @@
-import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { config } from "../src/config.ts";
+import { resetThrottleWindows } from "../src/throttle.ts";
 import { call, createSoftwareAuthenticator, createTestUser, fromIp, loginOk, startApp, testSql, verifyWithJwks, type TestApp, type TestUser } from "./helpers.ts";
 
 let app: TestApp;
@@ -7,7 +8,13 @@ const originalProxy = config.trustProxy;
 beforeAll(() => {
   app = startApp();
 });
-afterAll(() => app.stop());
+afterAll(() => {
+  app.stop();
+  resetThrottleWindows();
+});
+beforeEach(() => {
+  resetThrottleWindows();
+});
 afterEach(() => {
   config.trustProxy = originalProxy;
 });

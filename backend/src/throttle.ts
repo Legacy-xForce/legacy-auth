@@ -90,3 +90,13 @@ export function recordFailure(keys: string[]) {
 export function clearUserFailures(username: string) {
   windows.delete(`user:${username.toLowerCase()}`);
 }
+
+/**
+ * Forgets every failure window. A window outlives a single test by up to
+ * `loginFailureWindowSeconds` (15 minutes by default), and the test files run
+ * one after another in the same process, so tests that count failures must
+ * start from a clean slate instead of inheriting another test's address.
+ */
+export function resetThrottleWindows() {
+  windows.clear();
+}

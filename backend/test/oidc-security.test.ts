@@ -1,6 +1,7 @@
-import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "crypto";
 import { config } from "../src/config.ts";
+import { resetThrottleWindows } from "../src/throttle.ts";
 import { call, createTestUser, fromIp, startApp, testSql, type TestApp } from "./helpers.ts";
 import {
   Browser,
@@ -28,6 +29,10 @@ beforeAll(() => {
 afterAll(() => {
   app.stop();
   restoreFrontend();
+  resetThrottleWindows();
+});
+beforeEach(() => {
+  resetThrottleWindows();
 });
 afterEach(() => {
   config.loginMaxFailures = original.loginMax;

@@ -1,5 +1,6 @@
-import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { config } from "../src/config.ts";
+import { resetThrottleWindows } from "../src/throttle.ts";
 import { call, createSoftwareAuthenticator, createTestUser, decode, fromIp, loginOk, startApp, testSql, verifyWithJwks, type TestApp } from "./helpers.ts";
 import { Browser, ISSUER_ORIGIN, pkce, redeem, registerClient, useStubFrontend } from "./oidc-helpers.ts";
 
@@ -14,6 +15,10 @@ beforeAll(() => {
 afterAll(() => {
   app.stop();
   restoreFrontend();
+  resetThrottleWindows();
+});
+beforeEach(() => {
+  resetThrottleWindows();
 });
 afterEach(() => {
   config.loginMaxFailures = original.loginMax;
