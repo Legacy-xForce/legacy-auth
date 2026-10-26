@@ -70,6 +70,76 @@ function redirectUriProblem(value: unknown, isPublic: boolean): string | null {
   return isPublic ? null : "a custom scheme is only allowed for public (native) clients";
 }
 
+/** A URI split into the pieces that must stay identical when only its host changes. */
+function redirectParts(value: string): { url: URL; path: string; query: string } | null {
+  // Keep the path and query as they were written: `new URL` would collapse `/a/../b`, which the
+  // provider's exact match refuses, and a subdomain must not become a way around that.
+  const match = /^[a-z][a-z0-9+.-]*:\/\/([^/?#]*)([^?#]*)(\?[^#]*)?$/i.exec(value);
+  if (!match) return null;
+  try {
+    return { url: new URL(value), path: match[2] || "/", query: match[3] ?? "" };
+  } catch {
+    return null;
+  }
+}
+
+const isIpHost = (hostname: string) => hostname.startsWith("[") || /^\d{1,3}(?:\.\d{1,3}){3}$/.test(hostname);
+
+const isWebScheme = (protocol: string) => protocol === "https:" || protocol === "http:";
+
+/**
+ * Whether `value` may be a redirect (or post-logout) target for a client registered with `registered`.
+ *
+ * A registered web URI also authorizes the same path and query on any subdomain of its host, so a
+ * preview deployment (`https://<branch>.legacy-calendar.pages.dev/callback`) can sign in and out
+ * without registering every branch. Everything else is matched exactly.
+ */
+export function redirectUriAllowed(value: string, registered: string[] | undefined): boolean {
+  if (!Array.isArray(registered) || typeof value !== "string") return false;
+  if (registered.includes(value)) return true;
+
+  const candidate = redirectParts(value);
+  if (!candidate || candidate.url.username || candidate.url.password) return false;
+  if (!isWebScheme(candidate.url.protocol)) return false;
+
+  return registered.some((entry) => {
+    const base = redirectParts(entry);
+    if (!base || base.url.username || base.url.password) return false;
+    if (base.url.protocol !== candidate.url.protocol) return false;
+    if (base.url.port !== candidate.url.port) return false;
+    if (base.path !== candidate.path || base.query !== candidate.query) return false;
+    if (isIpHost(base.url.hostname)) return false;
+    return candidate.url.hostname !== base.url.hostname && candidate.url.hostname.endsWith(`.${base.url.hostname}`);
+  });
+}
+
+/**
+ * Whether a browser origin may make CORS requests for a client registered with `registered`: the
+ * origin of a registered redirect URI, or a subdomain of one (see `redirectUriAllowed`). An origin
+ * is only the scheme, host and port, so the path and query are not part of this comparison.
+ */
+export function redirectOriginAllowed(origin: string, registered: string[] | undefined): boolean {
+  if (!Array.isArray(registered) || typeof origin !== "string") return false;
+  let candidate: URL;
+  try {
+    candidate = new URL(origin);
+  } catch {
+    return false;
+  }
+  // Browsers send a canonical origin; anything else (a path, credentials, `null`) is not one.
+  if (candidate.origin !== origin || !isWebScheme(candidate.protocol)) return false;
+
+  return registered.some((entry) => {
+    const base = redirectParts(entry);
+    if (!base || base.url.username || base.url.password) return false;
+    if (base.url.protocol !== candidate.protocol) return false;
+    if (base.url.origin === candidate.origin) return true;
+    if (base.url.port !== candidate.port) return false;
+    if (isIpHost(base.url.hostname)) return false;
+    return candidate.hostname !== base.url.hostname && candidate.hostname.endsWith(`.${base.url.hostname}`);
+  });
+}
+
 function uriList(value: unknown, field: string, isPublic: boolean, options: { min: number }): string[] {
   if (!Array.isArray(value)) throw new ClientValidationError(`${field} must be an array`);
   if (value.length < options.min) throw new ClientValidationError(`${field} must list at least ${options.min} URI`);
@@ -100,8 +170,9 @@ export type ClientFields = {
 
 /**
  * Validates the fields of a client, merged over `base` for a partial update.
- * Redirect URIs are matched exactly by the provider, so what is accepted here
- * is exactly what a client can ever be sent back to.
+ * Redirect URIs are matched exactly by the provider, except that a web URI
+ * also authorizes the same path on a subdomain of its host (see
+ * `redirectUriAllowed`). No wildcard is stored: the subdomain rule is implicit.
  */
 export function validateClientFields(input: Record<string, unknown>, base?: ClientFields): ClientFields {
   const pick = <K extends keyof ClientFields>(key: K): unknown => (key in input ? input[key] : base?.[key]);
