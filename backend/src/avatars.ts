@@ -4,15 +4,20 @@ import { config } from "./config.ts";
 
 const AVATAR_SIZE = 256;
 const JPEG_QUALITY = 82;
+const WEBP_QUALITY = 80;
 
-const EXTENSIONS_BY_FORMAT: Record<string, { extension: string; contentType: string }> = {
-  gif: { extension: "gif", contentType: "image/gif" },
-  jpeg: { extension: "jpg", contentType: "image/jpeg" },
-  png: { extension: "jpg", contentType: "image/jpeg" },
-  webp: { extension: "jpg", contentType: "image/jpeg" },
+const JPEG = { extension: "jpg", contentType: "image/jpeg" };
+const WEBP = { extension: "webp", contentType: "image/webp" };
+
+const SUPPORTED_FORMATS = new Set(["gif", "jpeg", "png", "webp"]);
+
+// "gif" is no longer written but stays here so avatars saved before the WebP switch are still served and cleaned up.
+const CONTENT_TYPES_BY_EXTENSION: Record<string, string> = {
+  jpg: JPEG.contentType,
+  webp: WEBP.contentType,
+  gif: "image/gif",
 };
-
-const ALL_EXTENSIONS = ["jpg", "gif"];
+const ALL_EXTENSIONS = Object.keys(CONTENT_TYPES_BY_EXTENSION);
 
 export const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -26,13 +31,15 @@ export async function saveAvatar(userId: string, data: Uint8Array): Promise<{ ex
   const image = sharp(data, { animated: true });
   const metadata = await image.metadata();
   const format = metadata.format ?? "";
-  const target = EXTENSIONS_BY_FORMAT[format];
-  if (!target) {
+  if (!SUPPORTED_FORMATS.has(format)) {
     throw new UnsupportedImageError(`Unsupported image format: ${format || "unknown"}`);
   }
 
-  const output = target.extension === "gif"
-    ? await image.resize(AVATAR_SIZE, AVATAR_SIZE, { fit: "cover" }).gif().toBuffer()
+  const animated = (metadata.pages ?? 1) > 1;
+  const target = animated ? WEBP : JPEG;
+
+  const output = animated
+    ? await image.resize(AVATAR_SIZE, AVATAR_SIZE, { fit: "cover" }).webp({ quality: WEBP_QUALITY }).toBuffer()
     : await image.resize(AVATAR_SIZE, AVATAR_SIZE, { fit: "cover" }).flatten({ background: "#ffffff" }).jpeg({ quality: JPEG_QUALITY }).toBuffer();
 
   await removeAvatarFiles(userId, ALL_EXTENSIONS.filter((ext) => ext !== target.extension));
@@ -49,8 +56,7 @@ export async function findAvatar(userId: string): Promise<{ path: string; conten
   for (const extension of ALL_EXTENSIONS) {
     const path = avatarPath(userId, extension);
     if (await Bun.file(path).exists()) {
-      const contentType = extension === "gif" ? "image/gif" : "image/jpeg";
-      return { path, contentType };
+      return { path, contentType: CONTENT_TYPES_BY_EXTENSION[extension] };
     }
   }
   return null;

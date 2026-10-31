@@ -20,7 +20,7 @@ In production (see [Docker](#docker)), the backend serves the built frontend as 
 - `POST /auth/logout` to revoke refresh tokens
 - `POST /auth/change-password` to change the authenticated user's password
 - `GET /auth/me` / `PATCH /auth/me` to read/update the authenticated user's own profile
-- `POST /auth/profile-picture` to upload a profile picture (resized to 256x256, JPEG-compressed; GIFs stay animated)
+- `POST /auth/profile-picture` to upload a profile picture (resized to 256x256, JPEG-compressed; animated GIFs/WebPs become animated WebP)
 - `GET /auth/profile-picture/:userId` to fetch a user's profile picture
 - Admin user management: list/create/update users, roles, active status, and per-app scopes (see [Admin API](#admin-api))
 - Failed sign-in throttling and an `auth_events` audit log with retention and an admin view (see [Throttling and audit log](#throttling-and-audit-log))
@@ -233,7 +233,7 @@ Authorization: Bearer <access_token>
 
 Body: `multipart/form-data` with a `file` field containing a JPEG, PNG, WebP, or GIF image.
 
-Non-GIF images are resized to 256x256 (cropped to fit) and re-encoded as JPEG at quality 82. GIFs are resized to 256x256 and kept as GIF, preserving animation. The stored file replaces any previous profile picture for the user, including one saved in a different format.
+Static images are resized to 256x256 (cropped to fit) and re-encoded as JPEG at quality 82. Animated images (GIF or animated WebP) are resized to 256x256 and re-encoded as animated WebP at quality 80, preserving animation. The stored file replaces any previous profile picture for the user, including one saved in a different format.
 
 Returns `413` if the upload exceeds `AVATAR_MAX_UPLOAD_BYTES`, and `400` if the file is missing, not a supported image format, or corrupted.
 
@@ -244,9 +244,9 @@ On success:
 
 `GET /auth/profile-picture/:userId`
 
-Returns the stored image bytes with the appropriate `Content-Type` (`image/jpeg` or `image/gif`). Returns `404` if the user has no profile picture stored, and `400` if `userId` is not a valid UUID. This endpoint does not require authentication.
+Returns the stored image bytes with the appropriate `Content-Type` (`image/jpeg`, `image/webp`, or `image/gif` for pictures stored before the WebP switch). Returns `404` if the user has no profile picture stored, and `400` if `userId` is not a valid UUID. This endpoint does not require authentication.
 
-Profile pictures are stored on the filesystem under `AVATAR_STORAGE_DIR`, named `<user_id>.jpg` or `<user_id>.gif`. In Docker, mount a volume at `/app/data/avatars` (the default `AVATAR_STORAGE_DIR`) so uploads survive container restarts.
+Profile pictures are stored on the filesystem under `AVATAR_STORAGE_DIR`, named `<user_id>.jpg`, `<user_id>.webp`, or (legacy) `<user_id>.gif`. In Docker, mount a volume at `/app/data/avatars` (the default `AVATAR_STORAGE_DIR`) so uploads survive container restarts.
 
 ### JWKS
 

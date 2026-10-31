@@ -256,7 +256,7 @@ export function createOpenApiDocument(): OpenApiDocument {
         post: {
           tags: ["Profile"],
           summary: "Upload the authenticated user's profile picture",
-          description: "Accepts JPEG, PNG, WebP, or GIF images. Non-GIF images are resized to 256x256 and re-encoded as compressed JPEG. GIFs are resized to 256x256 and kept as GIF so animation is preserved.",
+          description: "Accepts JPEG, PNG, WebP, or GIF images. Static images are resized to 256x256 and re-encoded as compressed JPEG. Animated images (GIF or animated WebP) are resized to 256x256 and re-encoded as animated WebP so animation is preserved.",
           security: [{ bearerAuth: [] }],
           requestBody: {
             required: true,
@@ -302,9 +302,10 @@ export function createOpenApiDocument(): OpenApiDocument {
           ],
           responses: {
             "200": {
-              description: "Profile picture image bytes (image/jpeg or image/gif)",
+              description: "Profile picture image bytes (image/jpeg, image/webp, or legacy image/gif)",
               content: {
                 "image/jpeg": { schema: { type: "string", format: "binary" } },
+                "image/webp": { schema: { type: "string", format: "binary" } },
                 "image/gif": { schema: { type: "string", format: "binary" } },
               },
             },
