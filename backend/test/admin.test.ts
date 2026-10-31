@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import sharp from "sharp";
 import { call, createTestUser, login, loginOk, startApp, testSql, verifyWithJwks, type TestApp } from "./helpers.ts";
 
 let app: TestApp;
@@ -15,6 +16,17 @@ afterAll(() => app.stop());
 
 // 1x1 transparent PNG
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64");
+
+async function animatedGif(frames: number, width: number, height: number): Promise<Buffer> {
+  const colors = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 0]];
+  const pixels = Buffer.concat(Array.from({ length: frames }, (_, i) => {
+    const [r, g, b] = colors[i % colors.length];
+    return Buffer.from(Array.from({ length: width * height }, () => [r, g, b]).flat());
+  }));
+  return sharp(pixels, { raw: { width, height: height * frames, channels: 3, pageHeight: height } })
+    .gif({ delay: Array(frames).fill(100), loop: 0 })
+    .toBuffer();
+}
 
 function imageForm(bytes: Uint8Array, name = "pic.png", type = "image/png") {
   const form = new FormData();
@@ -195,6 +207,49 @@ describe("own profile and avatars", () => {
     const image = await fetch(`${app.url}/auth/profile-picture/${user.id}`);
     expect(image.status).toBe(200);
     expect(image.headers.get("content-type")).toBe("image/jpeg");
+  });
+
+  test("converts an animated GIF to an animated WebP", async () => {
+    const user = await createTestUser();
+    const token = (await loginOk(app, user)).access_token;
+    const gif = await animatedGif(3, 40, 20);
+    const response = await fetch(`${app.url}/auth/profile-picture`, { method: "POST", headers: { authorization: `Bearer ${token}` }, body: imageForm(gif, "pic.gif", "image/gif") });
+    expect(response.status).toBe(200);
+    expect((await response.json()).content_type).toBe("image/webp");
+    const image = await fetch(`${app.url}/auth/profile-picture/${user.id}`);
+    expect(image.headers.get("content-type")).toBe("image/webp");
+    const meta = await sharp(Buffer.from(await image.arrayBuffer()), { animated: true }).metadata();
+    expect(meta.format).toBe("webp");
+    expect(meta.pages).toBe(3);
+    expect(meta.width).toBe(256);
+    expect(meta.pageHeight).toBe(256);
+  });
+
+  test("a static WebP upload becomes a JPEG", async () => {
+    const user = await createTestUser();
+    const token = (await loginOk(app, user)).access_token;
+    const webp = await sharp(PNG).webp().toBuffer();
+    const response = await fetch(`${app.url}/auth/profile-picture`, { method: "POST", headers: { authorization: `Bearer ${token}` }, body: imageForm(webp, "pic.webp", "image/webp") });
+    expect((await response.json()).content_type).toBe("image/jpeg");
+  });
+
+  test("a picture stored as .gif before the WebP switch is still served and then replaced", async () => {
+    const user = await createTestUser();
+    await Bun.write(`${process.env.AVATAR_STORAGE_DIR}/${user.id}.gif`, await animatedGif(2, 16, 16));
+    expect((await fetch(`${app.url}/auth/profile-picture/${user.id}`)).headers.get("content-type")).toBe("image/gif");
+    const token = (await loginOk(app, user)).access_token;
+    await fetch(`${app.url}/auth/profile-picture`, { method: "POST", headers: { authorization: `Bearer ${token}` }, body: imageForm(await animatedGif(2, 16, 16), "pic.gif", "image/gif") });
+    expect((await fetch(`${app.url}/auth/profile-picture/${user.id}`)).headers.get("content-type")).toBe("image/webp");
+    expect(await Bun.file(`${process.env.AVATAR_STORAGE_DIR}/${user.id}.gif`).exists()).toBe(false);
+  });
+
+  test("replacing a GIF with a PNG serves the new picture", async () => {
+    const user = await createTestUser();
+    const token = (await loginOk(app, user)).access_token;
+    const headers = { authorization: `Bearer ${token}` };
+    await fetch(`${app.url}/auth/profile-picture`, { method: "POST", headers, body: imageForm(await animatedGif(2, 16, 16), "pic.gif", "image/gif") });
+    await fetch(`${app.url}/auth/profile-picture`, { method: "POST", headers, body: imageForm(PNG) });
+    expect((await fetch(`${app.url}/auth/profile-picture/${user.id}`)).headers.get("content-type")).toBe("image/jpeg");
   });
 
   test("rejects a file that is not an image, and a missing file", async () => {
