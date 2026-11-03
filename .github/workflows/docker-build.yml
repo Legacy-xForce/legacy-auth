@@ -42,6 +42,12 @@ jobs:
     name: Build ${{ matrix.arch }} image
     needs: prepare
     runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     env:
       IMAGE_NAME: ${{ needs.prepare.outputs.image }}
     strategy:
@@ -83,6 +89,16 @@ jobs:
           cache-from: type=gha,scope=auth-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=auth-${{ matrix.arch }}
 
+      # Provenance for the single-arch image, so a consumer pinning this digest
+      # can verify it. Nothing is pushed on pull requests, so nothing to attest.
+      - name: Attest ${{ matrix.arch }} image
+        if: github.event_name != 'pull_request'
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
       - name: Export digest
         if: github.event_name != 'pull_request'
         run: |
@@ -104,6 +120,12 @@ jobs:
     runs-on: ubuntu-24.04
     needs: [prepare, build]
     if: github.event_name != 'pull_request'
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     env:
       IMAGE_NAME: ${{ needs.prepare.outputs.image }}
 
@@ -137,7 +159,21 @@ jobs:
           for digest in *; do
             args+=("${IMAGE_NAME}@sha256:${digest}")
           done
-          docker buildx imagetools create "${args[@]}"
+          # The metadata file holds the manifest list descriptor, whose digest is
+          # what consumers resolve when they pull a tag; that is the subject
+          # attested below, alongside the per-architecture digests of the build job.
+          docker buildx imagetools create --metadata-file /tmp/manifest-metadata.json "${args[@]}"
+
+      - name: Read manifest list digest
+        id: subject
+        run: echo "digest=$(jq -re '."containerimage.descriptor".digest' /tmp/manifest-metadata.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Attest multi-arch image
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.subject.outputs.digest }}
+          push-to-registry: true
 
       - name: Trigger Coolify deployment
         if: github.ref == 'refs/heads/main'
