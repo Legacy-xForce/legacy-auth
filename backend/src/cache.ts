@@ -2,7 +2,20 @@ import { UserRecord } from "./types.ts";
 import { config } from "./config.ts";
 import { normalizeUsername } from "./usernames.ts";
 
-type CachedUser = Pick<UserRecord, "id" | "username" | "display_name" | "password_hash" | "role" | "active" | "scopes">;
+export type CachedUser = Pick<UserRecord, "id" | "username" | "display_name" | "password_hash" | "role" | "active" | "scopes">;
+
+/** The subset of a user row the login cache keeps. */
+export function toCachedUser(user: UserRecord): CachedUser {
+  return {
+    id: user.id,
+    username: user.username,
+    display_name: user.display_name,
+    password_hash: user.password_hash,
+    role: user.role,
+    active: user.active,
+    scopes: user.scopes,
+  };
+}
 
 type CacheEntry = {
   user: CachedUser;
@@ -31,8 +44,4 @@ export function cacheUser(user: CachedUser) {
 
 export function invalidateCachedUser(username: string) {
   cache.delete(normalizeUsername(username));
-}
-
-export function clearCache() {
-  cache.clear();
 }

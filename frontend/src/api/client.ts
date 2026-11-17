@@ -11,6 +11,20 @@ export class ApiError extends Error {
   }
 }
 
+export type HttpErrorCtor = new (message: string, status: number) => Error;
+
+/**
+ * The request plumbing shared with the interaction pages. Those use cookies
+ * rather than a bearer token and their own error class, but "parse JSON, throw
+ * the server's error message" is identical.
+ */
+export async function fetchJson<T>(url: string, init: RequestInit, ErrorClass: HttpErrorCtor = ApiError): Promise<T> {
+  const response = await fetch(url, init);
+  const data = await response.json().catch(() => null);
+  if (!response.ok) throw new ErrorClass(data?.error ?? response.statusText, response.status);
+  return data as T;
+}
+
 type TokenGetter = () => string | null;
 type RefreshHandler = () => Promise<boolean>;
 type LogoutHandler = () => void;
@@ -89,6 +103,8 @@ export const api = {
 };
 
 
-export function avatarUrl(userId: string) {
-  return `${API_URL}/auth/profile-picture/${userId}`;
+/** The optional version busts the browser cache after an upload without remounting the image. */
+export function avatarUrl(userId: string, version?: number) {
+  const base = `${API_URL}/auth/profile-picture/${userId}`;
+  return version === undefined ? base : `${base}?v=${version}`;
 }

@@ -1,5 +1,5 @@
-import { config } from "../config.ts";
 import { log } from "../logger.ts";
+import { issuerUrl } from "./origin.ts";
 import { isPrivateAddress, recordFailure, retryAfterSeconds, throttleKeys } from "../throttle.ts";
 
 /** Paths the OP serves. Everything else on this service is the legacy API or the console. */
@@ -57,7 +57,6 @@ function hardened(response: Response, pathname: string): Response {
  */
 export async function proxyToOidc(request: Request, socketPath: string, ip: string | null): Promise<Response> {
   const url = new URL(request.url);
-  const issuer = new URL(config.jwtIssuer);
 
   // Failed /token and /authorize requests are throttled per client address, like /auth/login.
   const throttled = url.pathname === "/token" || url.pathname === "/authorize";
@@ -73,9 +72,9 @@ export async function proxyToOidc(request: Request, socketPath: string, ip: stri
   const headers = new Headers(request.headers);
   for (const name of STRIPPED_REQUEST_HEADERS) headers.delete(name);
   // The provider derives secure cookies and absolute URLs from these; they describe the public address, not the socket.
-  headers.set("host", issuer.host);
-  headers.set("x-forwarded-host", issuer.host);
-  headers.set("x-forwarded-proto", issuer.protocol.replace(":", ""));
+  headers.set("host", issuerUrl.host);
+  headers.set("x-forwarded-host", issuerUrl.host);
+  headers.set("x-forwarded-proto", issuerUrl.protocol.replace(":", ""));
   if (ip) headers.set("x-client-ip", ip);
 
   let upstream: Response;

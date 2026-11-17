@@ -1,6 +1,6 @@
 import jwt from "jsonwebtoken";
 import { config } from "./config.ts";
-import { createHash, randomUUID } from "crypto";
+import { randomUUID } from "crypto";
 import { getPrivateKey, getPublicKey, getKid } from "./keys.ts";
 import { APP_AUDIENCES, AppAudience, UserRole, UserScopes } from "./types.ts";
 

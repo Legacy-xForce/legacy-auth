@@ -11,6 +11,7 @@ import {
   saveRefreshToken,
 } from "./db.ts";
 import { signAccessToken, signRefreshToken, getRefreshTokenExpiresAt, resolveAudience } from "./jwt.ts";
+import { tokenResponse } from "./lib/tokens.ts";
 
 interface StoredChallenge {
   challenge: string;
@@ -277,10 +278,7 @@ export async function verifyLogin(dto: PasskeyLoginVerifyPayload) {
   await saveRefreshToken(user.id, refreshTokenMeta.jti, refreshTokenMeta.token, getRefreshTokenExpiresAt());
 
   return {
-    access_token: accessToken,
-    refresh_token: refreshTokenMeta.token,
-    expires_in: config.accessTokenTtlSeconds,
-    refresh_expires_in: config.refreshTokenTtlSeconds,
+    ...tokenResponse(accessToken, refreshTokenMeta.token),
     user: {
       id: user.id,
       username: user.username,

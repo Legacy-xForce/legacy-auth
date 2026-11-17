@@ -1,16 +1,17 @@
 import { createRoute, z, type OpenAPIHono } from "@hono/zod-openapi";
-import { config } from "../config.ts";
 import { updateUserProfile } from "../db.ts";
 import { displayNameFromInput } from "../usernames.ts";
 import { invalidateCachedUser } from "../cache.ts";
-import { saveAvatar, findAvatar, UnsupportedImageError, UUID_PATTERN } from "../avatars.ts";
+import { findAvatar, UUID_PATTERN } from "../avatars.ts";
 import { serveStaticFile } from "../static.ts";
 import { withCorsHeaders } from "../cors.ts";
 import { UploadProfilePictureResponse } from "../schemas.ts";
 import { documentOnly } from "../lib/openapi.ts";
+import { performAvatarUpload } from "../lib/avatar-upload.ts";
+import { userWriteErrorResponse } from "../lib/errors.ts";
+import { toPublicUser } from "../lib/public-user.ts";
 import { requireAuth } from "../middleware/auth.ts";
 import type { AppEnv, Ctx, JsonCtx } from "../lib/context.ts";
-import type { UserRecord } from "../types.ts";
 
 type ProfileBody = { username?: string; display_name?: string };
 
@@ -79,14 +80,6 @@ export function registerProfileRoutes(app: OpenAPIHono<AppEnv>) {
   }), handleGetProfilePicture);
 }
 
-function toPublicUser(user: UserRecord) {
-  return {
-    id: user.id, username: user.username, display_name: user.display_name,
-    role: user.role, active: user.active, scopes: user.scopes,
-    created_at: user.created_at, updated_at: user.updated_at,
-  };
-}
-
 async function handleGetMe(c: Ctx) {
   return c.json(toPublicUser(c.get("user")) as any, 200);
 }
@@ -106,9 +99,7 @@ async function handleUpdateMe(c: JsonCtx<ProfileBody>) {
     invalidateCachedUser(updated.username);
     return c.json(toPublicUser(updated) as any, 200);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to update profile";
-    if (message.toLowerCase().includes("unique")) return c.json({ error: "Username already exists" } as any, 409);
-    return c.json({ error: message } as any, 500);
+    return userWriteErrorResponse(c, error, "Failed to update profile");
   }
 }
 
@@ -116,27 +107,6 @@ async function handleUploadProfilePicture(c: Ctx) {
   const user = c.get("user");
   if (!user.active) return c.json({ error: "Account disabled" } as any, 403);
   return performAvatarUpload(c, user.id);
-}
-
-async function performAvatarUpload(c: Ctx, userId: string) {
-  let formData: FormData;
-  try { formData = await c.req.formData(); }
-  catch { return c.json({ error: "Request must be multipart/form-data" } as any, 400); }
-
-  const file = formData.get("file");
-  if (!(file instanceof Blob) || file.size === 0) return c.json({ error: "file is required" } as any, 400);
-  if (file.size > config.avatarMaxUploadBytes) {
-    return c.json({ error: `file exceeds maximum size of ${config.avatarMaxUploadBytes} bytes` } as any, 413);
-  }
-
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  try {
-    const saved = await saveAvatar(userId, bytes);
-    return c.json({ success: true, content_type: saved.contentType } as any, 200);
-  } catch (error) {
-    if (error instanceof UnsupportedImageError) return c.json({ error: error.message } as any, 400);
-    return c.json({ error: "Invalid or corrupted image" } as any, 400);
-  }
 }
 
 async function handleGetProfilePicture(c: Ctx) {

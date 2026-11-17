@@ -1,12 +1,12 @@
 import { honoLogLayer } from "@loglayer/hono";
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { HTTPException } from "hono/http-exception";
-import { config } from "./config.ts";
 import { log, logLayer } from "./logger.ts";
 import { applyCorsOrigin, createCorsPreflightResponse } from "./cors.ts";
 import { clientIp, resolveClientIp, type PeerLookup } from "./lib/client-ip.ts";
 import type { AppEnv } from "./lib/context.ts";
 import { registerRoutes } from "./routes/index.ts";
+import { markDeprecated } from "./lib/deprecated.ts";
 import { oidc } from "./oidc/index.ts";
 
 export type { PeerLookup };
@@ -22,16 +22,19 @@ function createApp() {
   // The original handlers parsed JSON regardless of Content-Type. @hono/zod-openapi
   // rejects a missing/mismatched type with 415, so normalise it for JSON routes
   // before the validators run. Multipart/urlencoded routes keep their own type.
+  // Only routes whose handler takes a Zod-validated JSON body need this. The
+  // OIDC admin router parses JSON itself, and GET paths have no body at all.
   const jsonBodyRoutes = new Set([
-    "/auth/login", "/auth/refresh", "/auth/logout", "/auth/change-password", "/auth/me",
-    "/admin/users", "/admin/oidc/clients",
+    "POST /auth/login", "POST /auth/refresh", "POST /auth/logout", "POST /auth/change-password",
+    "PATCH /auth/me", "POST /admin/users",
   ]);
   app.use("*", async (c, next) => {
     resolveClientIp(c.req.raw, c.env as PeerLookup);
     const path = new URL(c.req.url).pathname.replace(/\/$/, "") || "/";
+    const route = `${c.req.method.toUpperCase()} ${path}`;
     const contentType = c.req.header("content-type");
     if (
-      jsonBodyRoutes.has(path) &&
+      jsonBodyRoutes.has(route) &&
       c.req.raw.body !== null &&
       (!contentType || (!contentType.startsWith("application/json") && !contentType.startsWith("multipart/form-data")))
     ) {
@@ -62,16 +65,6 @@ function createApp() {
 }
 
 const app = createApp();
-
-const DEPRECATED_LOGIN_ENDPOINTS = new Set(["POST /auth/login", "POST /auth/passkey/login-options", "POST /auth/passkey/login-verify"]);
-
-function markDeprecated(request: Request, response: Response): Response {
-  if (DEPRECATED_LOGIN_ENDPOINTS.has(`${request.method} ${new URL(request.url).pathname}`)) {
-    response.headers.set("Deprecation", "true");
-    response.headers.set("Link", `<${config.jwtIssuer}/.well-known/openid-configuration>; rel="successor-version"`);
-  }
-  return response;
-}
 
 /** Entry point for `Bun.serve({ fetch: handleRequest })`. Bun passes the server as the 2nd argument. */
 export async function handleRequest(request: Request, server: PeerLookup): Promise<Response> {

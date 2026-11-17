@@ -57,13 +57,13 @@ export const useAuthStore = defineStore("auth", {
       this.setTokens(tokens);
       await this.fetchMe();
     },
-    async loginWithPasskey(username?: string) {
+    /** Resolves on success and throws on failure — no boolean flag for callers to forget to check. */
+    async loginWithPasskey(username?: string): Promise<void> {
       const options = await api.getPasskeyLoginOptions(username);
       const assertion = await getPasskeyAssertion(options);
       const tokens = await api.verifyPasskeyLogin(assertion);
       this.setTokens(tokens);
       await this.fetchMe();
-      return true;
     },
     async registerPasskey(deviceName?: string) {
       const options = await api.getPasskeyRegisterOptions();

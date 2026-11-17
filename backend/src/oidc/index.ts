@@ -7,6 +7,8 @@ import { isOidcPath, proxyToOidc } from "./proxy.ts";
 
 type State = { status: "stopped" } | { status: "running"; backend: OidcBackend } | { status: "failed"; error: unknown };
 
+const NOT_RUNNING = "the OpenID Provider is not running";
+
 let state: State = { status: "stopped" };
 
 /**
@@ -24,13 +26,13 @@ export const oidc = {
 
   /** The private socket the OP backend listens on, for tests that check how it is exposed. */
   get socketPath() {
-    if (state.status !== "running") throw new Error("the OpenID Provider is not running");
+    if (state.status !== "running") throw new Error(NOT_RUNNING);
     return state.backend.socketPath;
   },
 
   /** The provider, for tests and for ending sessions. Throws unless the OP is running. */
   get provider() {
-    if (state.status !== "running") throw new Error("the OpenID Provider is not running");
+    if (state.status !== "running") throw new Error(NOT_RUNNING);
     return state.backend.provider;
   },
 

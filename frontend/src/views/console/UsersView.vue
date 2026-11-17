@@ -1,11 +1,17 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { RouterLink } from "vue-router";
 import { api } from "../../api/client";
 import { useAuthStore, type User } from "../../stores/auth";
 import { useToastStore } from "../../stores/toast";
+import { useCopyToClipboard } from "../../composables/useCopyToClipboard";
+import { errorMessage } from "../../utils/errors";
+import { ROLE_FILTER_OPTIONS, type Role } from "../../constants";
+import EmptyState from "../../components/EmptyState.vue";
 import Icon from "../../components/Icon.vue";
+import RoleChip from "../../components/RoleChip.vue";
 import SegmentedControl from "../../components/SegmentedControl.vue";
+import SkeletonRow from "../../components/SkeletonRow.vue";
 import StatusPill from "../../components/StatusPill.vue";
 import UserAvatar from "../../components/UserAvatar.vue";
 
@@ -13,21 +19,16 @@ type ListResponse = { items: User[]; total: number; page: number; pageSize: numb
 
 const auth = useAuthStore();
 const toast = useToastStore();
+const { copy } = useCopyToClipboard();
 
 const items = ref<User[]>([]);
 const total = ref(0);
 const page = ref(1);
 const pageSize = 10;
 const search = ref("");
-const role = ref<"" | "admin" | "user">("");
+const role = ref<"" | Role>("");
 const loading = ref(false);
 const loaded = ref(false);
-
-const roleOptions: { value: "" | "admin" | "user"; label: string }[] = [
-  { value: "", label: "All" },
-  { value: "admin", label: "Admins" },
-  { value: "user", label: "Members" },
-];
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize)));
 const filtered = computed(() => Boolean(search.value.trim() || role.value));
@@ -44,14 +45,16 @@ async function load() {
     items.value = res.items;
     total.value = res.total;
   } catch (err) {
-    toast.error(err instanceof Error ? err.message : "Couldn't load users");
+    toast.error(errorMessage(err, "Couldn't load users"));
   } finally {
     loading.value = false;
     loaded.value = true;
   }
 }
 
-watch(search, () => {
+// One fetch per action: filter changes reset to page 1 and load once; page
+// buttons load explicitly. No watch on `page`, so resetting it cannot double-fetch.
+watch([search, role], () => {
   clearTimeout(searchDebounce);
   searchDebounce = setTimeout(() => {
     page.value = 1;
@@ -59,14 +62,13 @@ watch(search, () => {
   }, 300);
 });
 
-watch(role, () => {
-  page.value = 1;
-  load();
-});
-
-watch(page, load);
-
 onMounted(load);
+onBeforeUnmount(() => clearTimeout(searchDebounce));
+
+function goToPage(next: number) {
+  page.value = next;
+  load();
+}
 
 const rangeStart = computed(() => (total.value === 0 ? 0 : (page.value - 1) * pageSize + 1));
 const rangeEnd = computed(() => Math.min(total.value, page.value * pageSize));
@@ -76,13 +78,12 @@ function clearFilters() {
   role.value = "";
 }
 
-// UUID copy
 const copiedId = ref<string | null>(null);
 async function copyId(id: string) {
-  await navigator.clipboard.writeText(id);
-  copiedId.value = id;
-  toast.success("User ID copied");
-  setTimeout(() => { copiedId.value = null; }, 1500);
+  if (await copy(id, "User ID copied")) {
+    copiedId.value = id;
+    setTimeout(() => { if (copiedId.value === id) copiedId.value = null; }, 1500);
+  }
 }
 </script>
 
@@ -120,7 +121,7 @@ async function copyId(id: string) {
           @focus="($event.target as HTMLInputElement).removeAttribute('readonly')"
         />
       </div>
-      <SegmentedControl v-model="role" :options="roleOptions" label="Role" class="w-full sm:w-auto" />
+      <SegmentedControl v-model="role" :options="ROLE_FILTER_OPTIONS" label="Role" class="w-full sm:w-auto" />
     </div>
 
     <section class="card overflow-hidden" aria-label="Users">
@@ -136,24 +137,18 @@ async function copyId(id: string) {
 
       <ul v-if="!loaded" class="m-0 list-none divide-y divide-line p-0" aria-busy="true">
         <li v-for="n in 4" :key="n" class="flex items-center gap-3 px-4 py-3.5 sm:px-5">
-          <span class="size-10 animate-pulse rounded-full bg-fg/8" />
-          <span class="flex flex-col gap-2">
-            <span class="h-3 w-28 animate-pulse rounded-full bg-fg/8" />
-            <span class="h-2.5 w-44 animate-pulse rounded-full bg-fg/5" />
-          </span>
+          <SkeletonRow />
         </li>
       </ul>
 
-      <div v-else-if="items.length === 0" class="flex flex-col items-center px-6 py-14 text-center">
-        <div class="flex size-12 items-center justify-center rounded-full bg-fg/6 text-muted">
-          <Icon name="search" :size="20" />
-        </div>
-        <h2 class="m-0 mt-4 text-title">{{ filtered ? "No users match" : "No users yet" }}</h2>
-        <p class="m-0 mt-1 text-meta text-muted">
-          {{ filtered ? "Try another name, or show every role." : "Add the first account to get started." }}
-        </p>
-        <button v-if="filtered" type="button" class="btn btn-secondary btn-sm mt-5" @click="clearFilters">Clear filters</button>
-      </div>
+      <EmptyState
+        v-else-if="items.length === 0"
+        icon="search"
+        :title="filtered ? 'No users match' : 'No users yet'"
+        :description="filtered ? 'Try another name, or show every role.' : 'Add the first account to get started.'"
+        :action-label="filtered ? 'Clear filters' : ''"
+        @action="clearFilters"
+      />
 
       <ul
         v-else
@@ -179,7 +174,7 @@ async function copyId(id: string) {
               </div>
               <div class="mt-0.5 truncate text-meta text-subtle">@{{ user.username }}</div>
               <div class="mt-1 flex items-center gap-2 sm:hidden">
-                <span v-if="user.role === 'admin'" class="chip h-5 bg-accent/12 px-2 text-[0.6875rem] text-accent">Admin</span>
+                <RoleChip :role="user.role" compact />
                 <StatusPill :active="user.active" class="h-5 px-2 text-[0.6875rem]" />
               </div>
               <button
@@ -200,13 +195,7 @@ async function copyId(id: string) {
             </div>
           </div>
 
-          <div class="hidden sm:block">
-            <span v-if="user.role === 'admin'" class="chip bg-accent/12 text-accent">
-              <Icon name="shieldCheck" :size="13" />
-              Admin
-            </span>
-            <span v-else class="chip bg-fg/6 text-muted">Member</span>
-          </div>
+          <div class="hidden sm:block"><RoleChip :role="user.role" /></div>
           <div class="hidden sm:block"><StatusPill :active="user.active" /></div>
           <Icon name="chevronRight" :size="18" class="text-subtle transition-transform group-hover:translate-x-0.5 group-hover:text-fg" />
         </li>
@@ -219,10 +208,10 @@ async function copyId(id: string) {
         <span class="tabular text-meta text-muted">{{ rangeStart }}–{{ rangeEnd }} of {{ total }}</span>
         <div v-if="totalPages > 1" class="flex items-center gap-1">
           <span class="tabular mr-2 text-meta text-subtle">Page {{ page }} of {{ totalPages }}</span>
-          <button type="button" class="icon-btn" :disabled="page <= 1" aria-label="Previous page" @click="page--">
+          <button type="button" class="icon-btn" :disabled="page <= 1" aria-label="Previous page" @click="goToPage(page - 1)">
             <Icon name="chevronLeft" :size="18" />
           </button>
-          <button type="button" class="icon-btn" :disabled="page >= totalPages" aria-label="Next page" @click="page++">
+          <button type="button" class="icon-btn" :disabled="page >= totalPages" aria-label="Next page" @click="goToPage(page + 1)">
             <Icon name="chevronRight" :size="18" />
           </button>
         </div>

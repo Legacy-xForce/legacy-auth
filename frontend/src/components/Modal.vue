@@ -62,38 +62,3 @@ onBeforeUnmount(() => document.removeEventListener("keydown", onKeyDown));
     </Transition>
   </Teleport>
 </template>
-
-<style scoped>
-.modal-enter-active {
-  transition: opacity 200ms var(--ease-out-quart);
-}
-
-.modal-leave-active {
-  transition: opacity 140ms var(--ease-in-quart);
-}
-
-.modal-enter-from,
-.modal-leave-to {
-  opacity: 0;
-}
-
-.modal-enter-active .modal-panel {
-  transition: transform 380ms var(--ease-out-expo);
-}
-
-.modal-leave-active .modal-panel {
-  transition: transform 160ms var(--ease-in-quart);
-}
-
-.modal-enter-from .modal-panel,
-.modal-leave-to .modal-panel {
-  transform: translateY(100%);
-}
-
-@media (min-width: 640px) {
-  .modal-enter-from .modal-panel,
-  .modal-leave-to .modal-panel {
-    transform: scale(0.96);
-  }
-}
-</style>

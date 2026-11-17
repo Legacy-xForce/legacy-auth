@@ -26,12 +26,16 @@ const epochSeconds = (value: Date | string) => Math.floor(new Date(value).getTim
 
 type PayloadRow = { payload: Payload; consumed_at: Date | string | null };
 
-function restore(row: PayloadRow, id: string): Payload {
+/** Rebuilds a stored payload, adding the consumption marker when there is one. */
+function restorePayload(row: PayloadRow): Payload {
   return {
     ...row.payload,
-    jti: id,
     ...(row.consumed_at ? { consumed: epochSeconds(row.consumed_at) } : {}),
   };
+}
+
+function restore(row: PayloadRow, id: string): Payload {
+  return { ...restorePayload(row), jti: id };
 }
 
 type SessionRow = { payload: Payload };
@@ -84,7 +88,7 @@ export class PostgresAdapter {
     `;
     // `findByUid` is only used for models whose bearer value is not needed back
     // (interactions are addressed by their uid); the library tolerates a missing jti.
-    return rows[0] ? { ...rows[0].payload, ...(rows[0].consumed_at ? { consumed: epochSeconds(rows[0].consumed_at) } : {}) } : undefined;
+    return rows[0] ? restorePayload(rows[0]) : undefined;
   }
 
   // Device-code flow is not enabled.

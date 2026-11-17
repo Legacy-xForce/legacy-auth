@@ -1,6 +1,7 @@
 import { withCorsHeaders } from "../cors.ts";
 import type { AuthEvent } from "../db.ts";
 import { jsonHeaders } from "../http.ts";
+import { readJsonObjectFromRequest } from "../lib/json.ts";
 import type { UserRecord } from "../types.ts";
 import {
   ClientExistsError,
@@ -32,15 +33,6 @@ const respond = (status: number, body: unknown) =>
 
 const notFound = () => respond(404, { error: "Client not found" });
 
-async function readBody(request: Request): Promise<Record<string, unknown> | null> {
-  try {
-    const body = await request.json();
-    return body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>) : null;
-  } catch {
-    return null;
-  }
-}
-
 const currentFields = (row: NonNullable<Awaited<ReturnType<typeof getClient>>>): ClientFields => ({
   name: row.name,
   is_public: row.is_public,
@@ -69,7 +61,7 @@ export async function handleOidcAdmin({ request, url, actor, audit }: AdminConte
         return respond(200, { items: (await listClients()).map(toPublicClient) });
       }
       if (request.method === "POST") {
-        const body = await readBody(request);
+        const body = await readJsonObjectFromRequest(request);
         if (!body) return respond(400, { error: "A JSON object body is required" });
         const clientId = typeof body.client_id === "string" ? body.client_id : "";
         const fields = validateClientFields(body);
@@ -92,7 +84,7 @@ export async function handleOidcAdmin({ request, url, actor, audit }: AdminConte
     if (!action && request.method === "PATCH") {
       const row = await getClient(clientId);
       if (!row) return notFound();
-      const body = await readBody(request);
+      const body = await readJsonObjectFromRequest(request);
       if (!body) return respond(400, { error: "A JSON object body is required" });
       if ("is_public" in body && body.is_public !== row.is_public) {
         return respond(400, { error: "is_public cannot be changed; register a new client instead" });
@@ -106,7 +98,7 @@ export async function handleOidcAdmin({ request, url, actor, audit }: AdminConte
     }
 
     if (action === "rotate-secret" && request.method === "POST") {
-      const body = (await readBody(request)) ?? {};
+      const body = (await readJsonObjectFromRequest(request)) ?? {};
       let grace: number | undefined;
       if ("grace_seconds" in body) {
         const value = body.grace_seconds;

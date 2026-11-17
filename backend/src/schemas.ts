@@ -126,9 +126,6 @@ export const JwksResponse = z.object({
   })),
 }).openapi("JwksResponse");
 
-/** The empty body several endpoints accept (passkey login-options, rotate-secret, …). */
-export const EmptyBody = z.object({}).passthrough();
-
 /** Reusable error envelope, used by the validation hook. */
 export const ErrorResponse = z.object({
   error: z.string(),

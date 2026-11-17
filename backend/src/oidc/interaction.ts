@@ -7,6 +7,7 @@ import { generateLoginOptions, verifyAssertion } from "../passkey.ts";
 import { isPrivateAddress, recordFailure, retryAfterSeconds, throttleKeys } from "../throttle.ts";
 import { auditOidc } from "./audit.ts";
 import { checkPasswordLogin } from "./credentials.ts";
+import { issuerOrigin } from "./origin.ts";
 import { ACR_BASIC } from "./provider.ts";
 import { errorPage, STATIC_PAGE_CSP } from "./pages.ts";
 import { ADMIN_SCOPE, entitledResourceScopes, mayUseAdminScope, RESOURCE_SERVERS } from "./scopes.ts";
@@ -80,7 +81,7 @@ const throttleIp = (req: IncomingMessage) => {
  */
 function sameOriginJson(req: IncomingMessage): string | null {
   const origin = header(req, "origin");
-  if (origin !== new URL(config.jwtIssuer).origin) return "Cross-origin request refused";
+  if (origin !== issuerOrigin) return "Cross-origin request refused";
   const site = header(req, "sec-fetch-site");
   if (site && site !== "same-origin") return "Cross-site request refused";
   if (!(header(req, "content-type") ?? "").toLowerCase().startsWith("application/json")) return "Content-Type must be application/json";

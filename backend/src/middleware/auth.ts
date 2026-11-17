@@ -4,19 +4,25 @@ import type { UserRecord } from "../types.ts";
 import type { Ctx } from "../lib/context.ts";
 
 type AuthResult = { ok: true; user: UserRecord } | { ok: false; response: Response };
+type TokenResult = { ok: true; payload: ReturnType<typeof verifyAccessToken> } | { ok: false; response: Response };
 
 function bearerToken(c: Ctx): string {
   const header = c.req.header("authorization") ?? "";
   return header.startsWith("Bearer ") ? header.slice("Bearer ".length).trim() : "";
 }
 
-async function resolveUser(c: Ctx): Promise<AuthResult> {
+/** Extracts and verifies the bearer token, with the same two 401s at every call site. */
+function verifyBearer(c: Ctx): TokenResult {
   const token = bearerToken(c);
   if (!token) return { ok: false, response: c.json({ error: "Authorization bearer token is required" }, 401) };
-  let payload;
-  try { payload = verifyAccessToken(token); }
+  try { return { ok: true, payload: verifyAccessToken(token) }; }
   catch { return { ok: false, response: c.json({ error: "Invalid access token" }, 401) }; }
-  const user = await findUserById(payload.sub);
+}
+
+async function resolveUser(c: Ctx): Promise<AuthResult> {
+  const token = verifyBearer(c);
+  if (!token.ok) return token;
+  const user = await findUserById(token.payload.sub);
   if (!user) return { ok: false, response: c.json({ error: "Invalid access token" }, 401) };
   if (!user.active) return { ok: false, response: c.json({ error: "Account disabled" }, 403) };
   return { ok: true, user };
@@ -24,12 +30,9 @@ async function resolveUser(c: Ctx): Promise<AuthResult> {
 
 /** Verifies the bearer token only; the handler resolves the user at its own point. */
 export const requireToken = async (c: Ctx, next: () => Promise<void>) => {
-  const token = bearerToken(c);
-  if (!token) return c.json({ error: "Authorization bearer token is required" }, 401);
-  let payload;
-  try { payload = verifyAccessToken(token); }
-  catch { return c.json({ error: "Invalid access token" }, 401); }
-  c.set("userId", payload.sub);
+  const token = verifyBearer(c);
+  if (!token.ok) return token.response;
+  c.set("userId", token.payload.sub);
   await next();
 };
 

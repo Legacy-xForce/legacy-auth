@@ -4,13 +4,17 @@ import { api } from "../../api/client";
 import { useAuthStore } from "../../stores/auth";
 import { useToastStore } from "../../stores/toast";
 import { isPasskeySupported } from "../../services/webauthn";
+import { describePasskeyError, errorMessage, missingFields } from "../../utils/errors";
+import { ROLE_LABELS } from "../../constants";
+import AvatarUpload from "../../components/AvatarUpload.vue";
 import ConfirmDialog from "../../components/ConfirmDialog.vue";
+import EmptyState from "../../components/EmptyState.vue";
 import FormAlert from "../../components/FormAlert.vue";
 import Icon from "../../components/Icon.vue";
 import Modal from "../../components/Modal.vue";
 import PasswordInput from "../../components/PasswordInput.vue";
+import SkeletonRow from "../../components/SkeletonRow.vue";
 import ThemePicker from "../../components/ThemePicker.vue";
-import UserAvatar from "../../components/UserAvatar.vue";
 
 const auth = useAuthStore();
 const toast = useToastStore();
@@ -30,8 +34,6 @@ const newPassword = ref("");
 const passwordSaving = ref(false);
 const passwordError = ref("");
 
-const avatarInput = ref<HTMLInputElement | null>(null);
-const avatarVersion = ref(0);
 const avatarError = ref("");
 
 const passkeySupported = isPasskeySupported();
@@ -68,7 +70,7 @@ async function saveProfile() {
     displayName.value = auth.user?.display_name ?? "";
     toast.success("Profile updated");
   } catch (err) {
-    profileError.value = err instanceof Error ? err.message : "Failed to update profile";
+    profileError.value = errorMessage(err, "Failed to update profile");
   } finally {
     profileSaving.value = false;
   }
@@ -76,7 +78,7 @@ async function saveProfile() {
 
 async function changePassword() {
   passwordError.value = "";
-  if (!currentPassword.value || !newPassword.value) {
+  if (missingFields(currentPassword.value, newPassword.value)) {
     passwordError.value = "Enter your current password and a new one.";
     return;
   }
@@ -90,30 +92,9 @@ async function changePassword() {
     currentPassword.value = "";
     newPassword.value = "";
   } catch (err) {
-    passwordError.value = err instanceof Error ? err.message : "Failed to change password";
+    passwordError.value = errorMessage(err, "Failed to change password");
   } finally {
     passwordSaving.value = false;
-  }
-}
-
-function triggerAvatarUpload() {
-  avatarInput.value?.click();
-}
-
-async function onAvatarSelected(event: Event) {
-  avatarError.value = "";
-  const file = (event.target as HTMLInputElement).files?.[0];
-  if (!file) return;
-  const formData = new FormData();
-  formData.append("file", file);
-  try {
-    await api.postForm("/auth/profile-picture", formData);
-    avatarVersion.value++;
-    toast.success("Picture updated");
-  } catch (err) {
-    avatarError.value = err instanceof Error ? err.message : "Failed to upload avatar";
-  } finally {
-    (event.target as HTMLInputElement).value = "";
   }
 }
 
@@ -139,12 +120,8 @@ async function handleRegisterPasskey() {
     await auth.registerPasskey(passkeyName.value.trim() || undefined);
     passkeys.value = await api.getPasskeys();
     toast.success("Passkey added");
-  } catch (err: any) {
-    if (err?.name === "NotAllowedError") {
-      passkeyError.value = "Passkey registration was cancelled.";
-    } else {
-      passkeyError.value = err instanceof Error ? err.message : "Failed to register passkey";
-    }
+  } catch (err) {
+    passkeyError.value = describePasskeyError(err, "Failed to register passkey", "Passkey registration was cancelled.");
   } finally {
     passkeyLoading.value = false;
   }
@@ -163,7 +140,7 @@ async function executeDeletePasskey() {
     passkeys.value = passkeys.value.filter((p) => p.id !== passkeyToDelete.value);
     toast.success("Passkey removed");
   } catch (err) {
-    passkeyError.value = err instanceof Error ? err.message : "Could not remove passkey";
+    passkeyError.value = errorMessage(err, "Could not remove passkey");
   } finally {
     passkeyLoading.value = false;
     passkeyToDelete.value = null;
@@ -178,23 +155,16 @@ function formatDate(value: string) {
 <template>
   <div class="mx-auto flex max-w-2xl flex-col gap-9">
     <header class="flex items-center gap-4">
-      <button
-        type="button"
-        class="group relative shrink-0 cursor-pointer rounded-full"
-        aria-label="Change profile picture"
-        @click="triggerAvatarUpload"
-      >
-        <UserAvatar v-if="auth.user" :key="avatarVersion" :user-id="auth.user.id" :name="auth.user.display_name || auth.user.username" :size="72" />
-        <span
-          class="absolute -right-0.5 -bottom-0.5 flex size-7 items-center justify-center rounded-full border-[3px] border-canvas bg-primary text-primary-contrast transition-transform group-hover:scale-110"
-        >
-          <Icon name="camera" :size="13" />
-        </span>
-      </button>
-      <input ref="avatarInput" type="file" accept="image/*" class="hidden" @change="onAvatarSelected" />
+      <AvatarUpload
+        v-if="auth.user"
+        :user-id="auth.user.id"
+        :name="auth.user.display_name || auth.user.username"
+        endpoint="/auth/profile-picture"
+        @error="avatarError = $event"
+      />
       <div class="min-w-0">
         <h1 class="m-0 truncate text-display">{{ auth.user?.display_name || auth.user?.username }}</h1>
-        <p class="m-0 mt-0.5 text-meta text-muted">@{{ auth.user?.username }} · {{ auth.isAdmin ? "Administrator" : "Member" }} · Legacy account</p>
+        <p class="m-0 mt-0.5 text-meta text-muted">@{{ auth.user?.username }} · {{ ROLE_LABELS[auth.user?.role ?? "user"] }} · Legacy account</p>
       </div>
     </header>
 
@@ -288,16 +258,15 @@ function formatDate(value: string) {
             </button>
           </li>
         </ul>
-        <div v-else-if="passkeysLoaded" class="flex flex-col items-center px-6 py-10 text-center">
-          <div class="flex size-12 items-center justify-center rounded-full bg-fg/6 text-muted">
-            <Icon name="fingerprint" :size="22" />
-          </div>
-          <p class="m-0 mt-3 text-body font-semibold">No passkeys yet</p>
-          <p class="m-0 mt-0.5 max-w-xs text-meta text-muted">Add one to sign in without typing your password.</p>
-        </div>
+        <EmptyState
+          v-else-if="passkeysLoaded"
+          icon="fingerprint"
+          title="No passkeys yet"
+          description="Add one to sign in without typing your password."
+          class="py-10"
+        />
         <div v-else class="flex items-center gap-3.5 px-5 py-3.5 sm:px-6" aria-busy="true">
-          <span class="size-10 animate-pulse rounded-ui bg-fg/8" />
-          <span class="h-3 w-32 animate-pulse rounded-full bg-fg/8" />
+          <SkeletonRow :size="40" rounded="ui" :lines="1" :wide="128" />
         </div>
       </div>
 

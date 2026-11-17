@@ -2,7 +2,8 @@ import { createHash, randomBytes, timingSafeEqual } from "crypto";
 import { config } from "../config.ts";
 import { sql } from "../db.ts";
 import { internalTargetProblem } from "./net-safety.ts";
-import { ADMIN_SCOPE, RESOURCE_SERVERS, resourcesForScopes, SUPPORTED_SCOPES } from "./scopes.ts";
+import { issuerOrigin } from "./origin.ts";
+import { ADMIN_SCOPE, resourceForAudience, resourcesForScopes, seedScopes, SUPPORTED_SCOPES } from "./scopes.ts";
 
 export type OidcClientRow = {
   client_id: string;
@@ -31,6 +32,19 @@ const COLUMNS = `client_id, client_secret_hash, previous_secret_hash, previous_s
 export const hashClientSecret = (secret: string) => createHash("sha256").update(secret).digest("hex");
 
 export const generateClientSecret = () => randomBytes(32).toString("base64url");
+
+/**
+ * The single rule for a rotated-out secret still being usable: a hash is set
+ * and its expiry is in the future. The DB stores an ISO string; the provider's
+ * extra client metadata carries the same instant as Unix seconds.
+ */
+export function previousSecretValid(hash: unknown, expiry: unknown, now = Date.now()): boolean {
+  if (typeof hash !== "string" || hash.length === 0) return false;
+  if (expiry instanceof Date) return expiry.getTime() > now; // Bun returns timestamptz as a Date
+  if (typeof expiry === "number") return expiry * 1000 > now; // provider metadata: Unix seconds
+  if (typeof expiry === "string") return new Date(expiry).getTime() > now;
+  return false;
+}
 
 /** Constant-time comparison of a presented secret with a stored hash. */
 export function secretMatchesHash(presented: string, storedHash: string | null | undefined): boolean {
@@ -94,7 +108,7 @@ const isWebScheme = (protocol: string) => protocol === "https:" || protocol === 
  * preview deployment (`https://<branch>.legacy-calendar.pages.dev/callback`) can sign in and out
  * without registering every branch. Everything else is matched exactly.
  */
-export function redirectUriAllowed(value: string, registered: string[] | undefined): boolean {
+export function redirectUriAllowed(value: string, registered: readonly string[] | undefined): boolean {
   if (!Array.isArray(registered) || typeof value !== "string") return false;
   if (registered.includes(value)) return true;
 
@@ -118,7 +132,7 @@ export function redirectUriAllowed(value: string, registered: string[] | undefin
  * origin of a registered redirect URI, or a subdomain of one (see `redirectUriAllowed`). An origin
  * is only the scheme, host and port, so the path and query are not part of this comparison.
  */
-export function redirectOriginAllowed(origin: string, registered: string[] | undefined): boolean {
+export function redirectOriginAllowed(origin: string, registered: readonly string[] | undefined): boolean {
   if (!Array.isArray(registered) || typeof origin !== "string") return false;
   let candidate: URL;
   try {
@@ -350,10 +364,7 @@ export function toPublicClient(row: OidcClientRow) {
     default_resources: row.default_resources,
     disabled: row.disabled_at !== null,
     has_secret: row.client_secret_hash !== null,
-    previous_secret_expires_at:
-      row.previous_secret_hash && row.previous_secret_expires_at && new Date(row.previous_secret_expires_at) > new Date()
-        ? row.previous_secret_expires_at
-        : null,
+    previous_secret_expires_at: previousSecretValid(row.previous_secret_hash, row.previous_secret_expires_at) ? row.previous_secret_expires_at : null,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -378,8 +389,7 @@ export async function findClientMetadata(clientId: string): Promise<Record<strin
   if (!row || row.disabled_at !== null) return undefined;
   if (!row.is_public && !row.client_secret_hash) return undefined;
 
-  const previousStillValid =
-    row.previous_secret_hash && row.previous_secret_expires_at && new Date(row.previous_secret_expires_at) > new Date();
+  const previousStillValid = previousSecretValid(row.previous_secret_hash, row.previous_secret_expires_at);
 
   return {
     client_id: row.client_id,
@@ -399,10 +409,10 @@ export async function findClientMetadata(clientId: string): Promise<Record<strin
     ...(row.primary_resource ? { legacy_primary_resource: row.primary_resource } : {}),
     ...(row.default_resources.length > 0 ? { legacy_default_resources: row.default_resources } : {}),
     ...(row.is_public ? {} : { client_secret: row.client_secret_hash }),
-    ...(previousStillValid
+    ...(previousStillValid && row.previous_secret_expires_at
       ? {
           legacy_previous_secret_hash: row.previous_secret_hash,
-          legacy_previous_secret_expires_at: Math.floor(new Date(row.previous_secret_expires_at!).getTime() / 1000),
+          legacy_previous_secret_expires_at: Math.floor(new Date(row.previous_secret_expires_at).getTime() / 1000),
         }
       : {}),
     ...(row.backchannel_logout_uri
@@ -415,7 +425,6 @@ export async function findClientMetadata(clientId: string): Promise<Record<strin
 
 /** The relying parties the issue registers up front. Seeded disabled: nothing changes for users until an admin enables them. */
 function defaultClients(): { id: string; fields: ClientFields }[] {
-  const issuerOrigin = new URL(config.jwtIssuer).origin;
   const web = (host: string, scopes: string[]): Omit<ClientFields, "name"> => ({
     is_public: false,
     redirect_uris: [`https://${host}/auth/callback`],
@@ -425,12 +434,15 @@ function defaultClients(): { id: string; fields: ClientFields }[] {
     primary_resource: null,
     default_resources: [],
   });
-  const tracker = "urn:legacy:tracker";
-  const trackerScopes = ["openid", "profile", "tracker.read", "tracker.write", "calendar.read", "offline_access"];
+  const calendar = resourceForAudience("calendar");
+  const tracker = resourceForAudience("tracker");
+  const calendarScopes = seedScopes(...calendar.scopes);
+  // Events on the map need a calendar token, but only read access to it.
+  const trackerScopes = seedScopes(...tracker.scopes, calendar.scopes[0]);
   return [
     {
       id: "calendar-web",
-      fields: { name: "Legacy Calendar", ...web("calendar.legacy-group.tech", ["openid", "profile", "calendar.read", "calendar.write", "offline_access"]) },
+      fields: { name: "Legacy Calendar", ...web("calendar.legacy-group.tech", calendarScopes) },
     },
     // The tracker's web app is a public client that runs on several domains (see the tracker's
     // docs/oidc-migration.md), so there is one redirect URI per domain. Its own server gets back-channel logout.
@@ -444,7 +456,7 @@ function defaultClients(): { id: string; fields: ClientFields }[] {
         redirect_uris: ["https://legacy-calendar.pages.dev/callback", "https://calendar.legacy-group.tech/callback", "http://localhost:5173/callback"],
         post_logout_redirect_uris: ["https://legacy-calendar.pages.dev/", "https://calendar.legacy-group.tech/", "http://localhost:5173/"],
         backchannel_logout_uri: null,
-        allowed_scopes: ["openid", "profile", "calendar.read", "calendar.write", "offline_access"],
+        allowed_scopes: calendarScopes,
         primary_resource: null,
         default_resources: [],
       },
@@ -459,8 +471,8 @@ function defaultClients(): { id: string; fields: ClientFields }[] {
         backchannel_logout_uri: "https://tracker.legacy-group.tech/auth/backchannel-logout",
         allowed_scopes: trackerScopes,
         // Events on the map need a calendar token, but a tracker user without a calendar must still sign in.
-        primary_resource: tracker,
-        default_resources: [tracker, "urn:legacy:calendar"],
+        primary_resource: tracker.indicator,
+        default_resources: [tracker.indicator, calendar.indicator],
       },
     },
     {
@@ -472,8 +484,8 @@ function defaultClients(): { id: string; fields: ClientFields }[] {
         post_logout_redirect_uris: ["com.legacy.legacytracker:/logout"],
         backchannel_logout_uri: "https://tracker.legacy-group.tech/auth/backchannel-logout",
         allowed_scopes: trackerScopes,
-        primary_resource: tracker,
-        default_resources: [tracker, "urn:legacy:calendar"],
+        primary_resource: tracker.indicator,
+        default_resources: [tracker.indicator, calendar.indicator],
       },
     },
     {
@@ -484,7 +496,7 @@ function defaultClients(): { id: string; fields: ClientFields }[] {
         redirect_uris: [`${issuerOrigin}/auth/callback`],
         post_logout_redirect_uris: [`${issuerOrigin}/`],
         backchannel_logout_uri: `${issuerOrigin}/auth/backchannel-logout`,
-        allowed_scopes: ["openid", "profile", ADMIN_SCOPE, "offline_access"],
+        allowed_scopes: seedScopes(ADMIN_SCOPE),
         primary_resource: null,
         default_resources: [],
       },

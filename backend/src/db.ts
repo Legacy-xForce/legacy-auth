@@ -10,8 +10,6 @@ export const sql = new SQL(config.dbUrl);
 
 const USER_COLUMNS = "id, username, display_name, password_hash, role, active, scopes, created_at, updated_at";
 
-const DEFAULT_SCOPES: UserScopes = { calendar: false, tracker: false };
-
 function normalizeScopes(raw: unknown): UserScopes {
   const value = typeof raw === "string" ? JSON.parse(raw) : raw;
   return {
@@ -184,27 +182,26 @@ export async function initDatabase() {
   }
 }
 
-export async function findUserByUsername(username: string): Promise<UserRecord | null> {
+/** The username lookup shared by the full and the login-hot-path projections. */
+async function selectUserByUsername<T>(username: string, columns: string): Promise<T | null> {
   const normalized = normalizeUsername(username);
-  const result = await sql<UserRecord[]>`
-    SELECT ${sql.unsafe(USER_COLUMNS)}
+  const result = await sql<T[]>`
+    SELECT ${sql.unsafe(columns)}
     FROM users
     WHERE lower(username) = ${normalized}
     ORDER BY (username = ${normalized}) DESC, created_at ASC
     LIMIT 1;
   `;
-  return normalizeUser(result[0]) ?? null;
+  return result[0] ?? null;
 }
 
+export async function findUserByUsername(username: string): Promise<UserRecord | null> {
+  return normalizeUser(await selectUserByUsername<UserRecord>(username, USER_COLUMNS)) ?? null;
+}
+
+/** Narrow projection used on every cache-miss login, so no unused columns are fetched. */
 export async function findUserActiveByUsername(username: string): Promise<Pick<UserRecord, "id" | "active"> | null> {
-  const normalized = normalizeUsername(username);
-  const result = await sql<Pick<UserRecord, "id" | "active">[]>`
-    SELECT id, active FROM users
-    WHERE lower(username) = ${normalized}
-    ORDER BY (username = ${normalized}) DESC, created_at ASC
-    LIMIT 1;
-  `;
-  return result[0] ?? null;
+  return selectUserByUsername<Pick<UserRecord, "id" | "active">>(username, "id, active");
 }
 
 export async function findUserById(id: string): Promise<UserRecord | null> {
@@ -215,10 +212,6 @@ export async function findUserById(id: string): Promise<UserRecord | null> {
     LIMIT 1;
   `;
   return normalizeUser(result[0]) ?? null;
-}
-
-export async function createUser(username: string, password: string): Promise<UserRecord> {
-  return createUserWithActive(username, password, true);
 }
 
 export async function createUserWithActive(
@@ -248,28 +241,6 @@ export async function createUserWithActive(
   return normalizeUser(result[0]);
 }
 
-export async function upsertUserWithPasswordHash(
-  username: string,
-  passwordHash: string,
-  active: boolean,
-  displayName?: string
-): Promise<UserRecord> {
-  const typedUsername = displayNameFromInput(username);
-  const normalizedUsername = normalizeUsername(typedUsername);
-  const name = displayNameFromInput(displayName) || typedUsername || normalizedUsername;
-  const result = await sql<UserRecord[]>`
-    INSERT INTO users (username, display_name, password_hash, active)
-    VALUES (${normalizedUsername}, ${name}, ${passwordHash}, ${active})
-    ON CONFLICT (username) DO UPDATE SET
-      display_name = EXCLUDED.display_name,
-      password_hash = EXCLUDED.password_hash,
-      active = EXCLUDED.active,
-      updated_at = now()
-    RETURNING ${sql.unsafe(USER_COLUMNS)};
-  `;
-  return normalizeUser(result[0]);
-}
-
 export async function updateUserPasswordHash(userId: string, passwordHash: string): Promise<UserRecord | null> {
   const result = await sql<UserRecord[]>`
     UPDATE users
@@ -279,6 +250,17 @@ export async function updateUserPasswordHash(userId: string, passwordHash: strin
     RETURNING ${sql.unsafe(USER_COLUMNS)};
   `;
   return normalizeUser(result[0]) ?? null;
+}
+
+/**
+ * Upgrades a legacy bcrypt hash to Argon2 on a successful sign-in. Returns the
+ * updated row, or null when the hash was already the current format (or the
+ * update lost a race). Both the legacy and the OIDC login call this, so the
+ * rule lives in one place.
+ */
+export async function upgradeLegacyPasswordHash(user: Pick<UserRecord, "id" | "password_hash">, password: string): Promise<UserRecord | null> {
+  if (!user.password_hash.startsWith("$2")) return null;
+  return updateUserPasswordHash(user.id, await Bun.password.hash(password));
 }
 
 export async function updateUserActive(userId: string, active: boolean): Promise<UserRecord | null> {
@@ -352,33 +334,29 @@ export async function listUsersPaginated(filters: UserListFilters): Promise<{ it
   const searchPattern = search ? `%${search}%` : null;
   const offset = (filters.page - 1) * filters.pageSize;
 
-  const items = await sql<UserRecord[]>`
-    SELECT ${sql.unsafe(USER_COLUMNS)}
-    FROM users
-    WHERE (${searchPattern}::text IS NULL OR username ILIKE ${searchPattern} OR display_name ILIKE ${searchPattern})
-      AND (${filters.role ?? null}::text IS NULL OR role = ${filters.role ?? null})
-    ORDER BY lower(username) ASC
-    LIMIT ${filters.pageSize} OFFSET ${offset};
-  `;
-
-  const countResult = await sql<{ count: string }[]>`
-    SELECT COUNT(*)::text AS count
-    FROM users
-    WHERE (${searchPattern}::text IS NULL OR username ILIKE ${searchPattern} OR display_name ILIKE ${searchPattern})
-      AND (${filters.role ?? null}::text IS NULL OR role = ${filters.role ?? null});
+  // COUNT(*) OVER() alone loses the total when a page past the end returns no
+  // rows. The CTE keeps one counted row via a LEFT JOIN, so a single round trip
+  // still reports the filtered total on every page.
+  const rows = await sql<(UserRecord & { total: string; page_marker: string | null })[]>`
+    WITH matches AS (
+      SELECT ${sql.unsafe(USER_COLUMNS)}
+      FROM users
+      WHERE (${searchPattern}::text IS NULL OR username ILIKE ${searchPattern} OR display_name ILIKE ${searchPattern})
+        AND (${filters.role ?? null}::text IS NULL OR role = ${filters.role ?? null})
+    ),
+    counted AS (SELECT COUNT(*)::text AS total FROM matches)
+    SELECT counted.total, page.id AS page_marker, page.*
+    FROM counted
+    LEFT JOIN (
+      SELECT * FROM matches ORDER BY lower(username) ASC LIMIT ${filters.pageSize} OFFSET ${offset}
+    ) page ON true;
   `;
 
   return {
-    items: items.map((item) => normalizeUser(item)),
-    total: Number(countResult[0]?.count ?? 0),
+    items: rows.filter((row) => row.page_marker !== null)
+      .map(({ total: _total, page_marker: _marker, ...item }) => normalizeUser(item)),
+    total: Number(rows[0]?.total ?? 0),
   };
-}
-
-export async function deleteUserByUsername(username: string): Promise<void> {
-  await sql`
-    DELETE FROM users
-    WHERE lower(username) = ${normalizeUsername(username)};
-  `;
 }
 
 export async function deleteUserById(id: string): Promise<boolean> {
@@ -454,16 +432,22 @@ export async function revokeRefreshFamily(familyId: string): Promise<number> {
   return result.length;
 }
 
-export async function revokeRefreshToken(jti: string): Promise<void> {
+/** Explicit revocation (logout, password change, disable): no rotation grace applies. */
+async function revokeTokens(where: { jti: string } | { userId: string }): Promise<void> {
+  const column = "jti" in where ? "jti" : "user_id";
+  const value = "jti" in where ? where.jti : where.userId;
   await sql`
-    UPDATE refresh_tokens SET revoked_at = now(), rotated_at = NULL WHERE jti = ${jti};
+    UPDATE refresh_tokens SET revoked_at = now(), rotated_at = NULL
+    WHERE ${sql.unsafe(column)} = ${value};
   `;
 }
 
+export async function revokeRefreshToken(jti: string): Promise<void> {
+  await revokeTokens({ jti });
+}
+
 export async function revokeAllRefreshTokensForUser(userId: string): Promise<void> {
-  await sql`
-    UPDATE refresh_tokens SET revoked_at = now(), rotated_at = NULL WHERE user_id = ${userId};
-  `;
+  await revokeTokens({ userId });
 }
 
 function hashToken(token: string) {
@@ -636,31 +620,30 @@ export async function listAuthEvents(filters: AuthEventFilters): Promise<{ items
   const until = filters.until?.toISOString() ?? null;
   const offset = (filters.page - 1) * filters.pageSize;
 
-  const items = await sql<AuthEventRow[]>`
-    SELECT id::text AS id, event, success, user_id, username, actor_id, ip, user_agent, detail, created_at
-    FROM auth_events
-    WHERE (${event}::text IS NULL OR event = ${event})
-      AND (${success}::boolean IS NULL OR success = ${success})
-      AND (${userId}::uuid IS NULL OR user_id = ${userId})
-      AND (${username}::text IS NULL OR lower(username) = ${username})
-      AND (${since}::timestamptz IS NULL OR created_at >= ${since})
-      AND (${until}::timestamptz IS NULL OR created_at < ${until})
-    ORDER BY created_at DESC, id DESC
-    LIMIT ${filters.pageSize} OFFSET ${offset};
+  const rows = await sql<(AuthEventRow & { total: string; page_marker: string | null })[]>`
+    WITH matches AS (
+      SELECT id::text AS id, event, success, user_id, username, actor_id, ip, user_agent, detail, created_at
+      FROM auth_events
+      WHERE (${event}::text IS NULL OR event = ${event})
+        AND (${success}::boolean IS NULL OR success = ${success})
+        AND (${userId}::uuid IS NULL OR user_id = ${userId})
+        AND (${username}::text IS NULL OR lower(username) = ${username})
+        AND (${since}::timestamptz IS NULL OR created_at >= ${since})
+        AND (${until}::timestamptz IS NULL OR created_at < ${until})
+    ),
+    counted AS (SELECT COUNT(*)::text AS total FROM matches)
+    SELECT counted.total, page.id AS page_marker, page.*
+    FROM counted
+    LEFT JOIN (
+      SELECT * FROM matches ORDER BY created_at DESC, id DESC LIMIT ${filters.pageSize} OFFSET ${offset}
+    ) page ON true;
   `;
 
-  const countResult = await sql<{ count: string }[]>`
-    SELECT COUNT(*)::text AS count
-    FROM auth_events
-    WHERE (${event}::text IS NULL OR event = ${event})
-      AND (${success}::boolean IS NULL OR success = ${success})
-      AND (${userId}::uuid IS NULL OR user_id = ${userId})
-      AND (${username}::text IS NULL OR lower(username) = ${username})
-      AND (${since}::timestamptz IS NULL OR created_at >= ${since})
-      AND (${until}::timestamptz IS NULL OR created_at < ${until});
-  `;
-
-  return { items, total: Number(countResult[0]?.count ?? 0) };
+  return {
+    items: rows.filter((row) => row.page_marker !== null)
+      .map(({ total: _total, page_marker: _marker, ...item }) => item),
+    total: Number(rows[0]?.total ?? 0),
+  };
 }
 
 /** Deletes audit rows older than `retentionDays` and returns how many went. */

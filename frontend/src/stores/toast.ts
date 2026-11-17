@@ -1,7 +1,7 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
 
-export type ToastTone = "success" | "error" | "info";
+export type ToastTone = "success" | "error";
 
 export type Toast = { id: number; tone: ToastTone; message: string };
 
@@ -26,6 +26,5 @@ export const useToastStore = defineStore("toast", () => {
     dismiss,
     success: (message: string) => show(message, "success"),
     error: (message: string) => show(message, "error", 4500),
-    info: (message: string) => show(message, "info"),
   };
 });

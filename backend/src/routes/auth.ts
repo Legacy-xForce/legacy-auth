@@ -3,20 +3,22 @@ import { config } from "../config.ts";
 import {
   findUserByUsername, findUserActiveByUsername, findUserById, saveRefreshToken,
   findRefreshTokenByJti, verifyRefreshTokenHash, claimRefreshToken, revokeRefreshFamily,
-  revokeRefreshToken, revokeAllRefreshTokensForUser, updateUserPasswordHash,
+  revokeRefreshToken, revokeAllRefreshTokensForUser, updateUserPasswordHash, upgradeLegacyPasswordHash,
 } from "../db.ts";
 import {
   signAccessToken, signRefreshToken, verifyRefreshToken, getRefreshTokenExpiresAt,
   resolveAudience, AudienceError,
 } from "../jwt.ts";
-import { getCachedUser, cacheUser, invalidateCachedUser } from "../cache.ts";
+import { getCachedUser, cacheUser, invalidateCachedUser, toCachedUser } from "../cache.ts";
 import { normalizeUsername } from "../usernames.ts";
 import { throttleKeys, retryAfterSeconds, recordFailure, clearUserFailures } from "../throttle.ts";
 import { oidc } from "../oidc/index.ts";
 import { LoginRequest, RefreshRequest, ChangePasswordRequest, TokenResponse, LogoutResponse, ChangePasswordResponse, ErrorResponse } from "../schemas.ts";
 import { audit, tooManyAttempts } from "../lib/audit.ts";
 import { throttleIp } from "../lib/client-ip.ts";
-import { requireAuth, requireToken } from "../middleware/auth.ts";
+import { isDeprecatedEndpoint } from "../lib/deprecated.ts";
+import { tokenResponse } from "../lib/tokens.ts";
+import { requireToken } from "../middleware/auth.ts";
 import type { AppEnv, JsonCtx } from "../lib/context.ts";
 
 type LoginBody = { username: string; password: string; audience?: "calendar" | "tracker" };
@@ -27,7 +29,7 @@ export function registerAuthRoutes(app: OpenAPIHono<AppEnv>) {
   app.openapi(
     createRoute({
       method: "post", path: "/auth/login", tags: ["Auth"],
-      summary: "Authenticate a user and issue tokens", deprecated: true,
+      summary: "Authenticate a user and issue tokens", deprecated: isDeprecatedEndpoint("post", "/auth/login"),
       description: "Deprecated: the Resource Owner Password Credentials grant. Use the OpenID Provider (`/.well-known/openid-configuration`). Still honours `audience`; every response carries `Deprecation: true`.",
       request: { body: { required: true, content: { "application/json": { schema: LoginRequest } } } },
       responses: {
@@ -124,10 +126,7 @@ async function handleLogin(c: JsonCtx<LoginBody>) {
     const record = await findUserByUsername(username);
     if (!record) return reject("Invalid credentials", 401);
     if (!record.active) return reject("Account disabled", 403, record.id);
-    user = {
-      id: record.id, username: record.username, display_name: record.display_name,
-      password_hash: record.password_hash, role: record.role, active: record.active, scopes: record.scopes,
-    };
+    user = toCachedUser(record);
     cacheUser(user);
   }
 
@@ -143,16 +142,10 @@ async function handleLogin(c: JsonCtx<LoginBody>) {
     return c.json({ error: error.message }, error.statusCode);
   }
 
-  if (user.password_hash.startsWith("$2")) {
-    const upgradedPasswordHash = await Bun.password.hash(password);
-    const updatedUser = await updateUserPasswordHash(user.id, upgradedPasswordHash);
-    if (updatedUser) {
-      user = {
-        id: updatedUser.id, username: updatedUser.username, display_name: updatedUser.display_name,
-        password_hash: updatedUser.password_hash, role: updatedUser.role, active: updatedUser.active, scopes: updatedUser.scopes,
-      };
-      cacheUser(user);
-    }
+  const upgraded = await upgradeLegacyPasswordHash(user, password);
+  if (upgraded) {
+    user = toCachedUser(upgraded);
+    cacheUser(user);
   }
 
   const accessToken = signAccessToken({ sub: user.id, username: user.username, displayName: user.display_name, role: user.role, scopes: user.scopes, audience });
@@ -160,10 +153,7 @@ async function handleLogin(c: JsonCtx<LoginBody>) {
   await saveRefreshToken(user.id, refreshTokenMeta.jti, refreshTokenMeta.token, getRefreshTokenExpiresAt());
   audit(c, { event: "login", success: true, userId: user.id, username: user.username, detail: audience.join(",") || null });
 
-  return c.json({
-    access_token: accessToken, refresh_token: refreshTokenMeta.token,
-    expires_in: config.accessTokenTtlSeconds, refresh_expires_in: config.refreshTokenTtlSeconds,
-  }, 200);
+  return c.json(tokenResponse(accessToken, refreshTokenMeta.token), 200);
 }
 
 async function handleRefresh(c: JsonCtx<RefreshBody>) {
@@ -220,10 +210,7 @@ async function handleRefresh(c: JsonCtx<RefreshBody>) {
   const refreshTokenMeta = signRefreshToken({ sub: payload.sub, username: user.username, app: payload.app });
   await saveRefreshToken(payload.sub, refreshTokenMeta.jti, refreshTokenMeta.token, getRefreshTokenExpiresAt(), family);
 
-  return c.json({
-    access_token: accessToken, refresh_token: refreshTokenMeta.token,
-    expires_in: config.accessTokenTtlSeconds, refresh_expires_in: config.refreshTokenTtlSeconds,
-  }, 200);
+  return c.json(tokenResponse(accessToken, refreshTokenMeta.token), 200);
 }
 
 async function handleLogout(c: JsonCtx<RefreshBody>) {

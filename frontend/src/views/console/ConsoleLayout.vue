@@ -3,6 +3,7 @@ import { ref } from "vue";
 import { RouterLink, RouterView, useRouter } from "vue-router";
 import { useAuthStore } from "../../stores/auth";
 import { useDismiss } from "../../composables/useDismiss";
+import { ROLE_LABELS } from "../../constants";
 import BrandMark from "../../components/BrandMark.vue";
 import Icon from "../../components/Icon.vue";
 import UserAvatar from "../../components/UserAvatar.vue";
@@ -72,7 +73,7 @@ async function logout() {
                 <UserAvatar v-if="auth.user" :user-id="auth.user.id" :name="auth.user.display_name || auth.user.username" :size="40" />
                 <div class="min-w-0">
                   <div class="truncate text-body font-semibold">{{ auth.user?.display_name || auth.user?.username }}</div>
-                  <div class="truncate text-meta text-muted">@{{ auth.user?.username }} · {{ auth.isAdmin ? "Administrator" : "Member" }}</div>
+                  <div class="truncate text-meta text-muted">@{{ auth.user?.username }} · {{ ROLE_LABELS[auth.user?.role ?? "user"] }}</div>
                 </div>
               </div>
               <div class="mx-1 mb-1.5 h-px bg-line" />

@@ -18,10 +18,10 @@ const toast = useToastStore();
         :role="item.tone === 'error' ? 'alert' : 'status'"
       >
         <Icon
-          :name="item.tone === 'error' ? 'alertCircle' : item.tone === 'info' ? 'info' : 'checkCircle'"
+          :name="item.tone === 'error' ? 'alertCircle' : 'checkCircle'"
           :size="18"
           class="shrink-0"
-          :class="{ 'text-danger': item.tone === 'error', 'text-success': item.tone === 'success', 'text-accent': item.tone === 'info' }"
+          :class="{ 'text-danger': item.tone === 'error', 'text-success': item.tone === 'success' }"
         />
         <span class="min-w-0 flex-1 text-meta font-medium text-fg">{{ item.message }}</span>
         <button type="button" class="icon-btn size-7 rounded-lg" aria-label="Dismiss" @click="toast.dismiss(item.id)">

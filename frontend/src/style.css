@@ -54,8 +54,6 @@
   --text-headline--line-height: 1.6rem;
   --text-display: 1.625rem;
   --text-display--line-height: 2rem;
-  --text-display-lg: 2rem;
-  --text-display-lg--line-height: 2.375rem;
 
   --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
@@ -63,7 +61,6 @@
 
   --animate-rise-in: rise-in 360ms var(--ease-out-expo) both;
   --animate-fade-in: fade-in 200ms var(--ease-out-quart) both;
-  --animate-pop-in: pop-in 220ms var(--ease-out-expo) both;
 
   @keyframes rise-in {
     from {
@@ -78,12 +75,6 @@
     }
   }
 
-  @keyframes pop-in {
-    from {
-      opacity: 0;
-      transform: scale(0.96);
-    }
-  }
 }
 
 /*
@@ -381,24 +372,51 @@ button,
     @apply inline-flex h-6 items-center gap-1 rounded-full px-2.5 text-xs font-semibold whitespace-nowrap;
   }
 
-  .link {
-    @apply cursor-pointer font-medium text-accent no-underline underline-offset-4 hover:underline;
-  }
 }
 
 /* ---------- Transitions ---------- */
 
-.fade-enter-active {
-  transition: opacity 200ms var(--ease-out-quart);
+/* Modal, dialog panel and the unsaved-changes bar share the same enter/leave pattern. */
+.modal-enter-active,
+.savebar-enter-active {
+  transition:
+    opacity 200ms var(--ease-out-quart),
+    transform 380ms var(--ease-out-expo);
 }
 
-.fade-leave-active {
-  transition: opacity 120ms var(--ease-in-quart);
+.modal-leave-active,
+.savebar-leave-active {
+  transition:
+    opacity 140ms var(--ease-in-quart),
+    transform 140ms var(--ease-in-quart);
 }
 
-.fade-enter-from,
-.fade-leave-to {
+.modal-enter-from,
+.modal-leave-to,
+.savebar-enter-from,
+.savebar-leave-to {
   opacity: 0;
+  transform: translateY(1rem);
+}
+
+.modal-enter-active .modal-panel {
+  transition: transform 380ms var(--ease-out-expo);
+}
+
+.modal-leave-active .modal-panel {
+  transition: transform 160ms var(--ease-in-quart);
+}
+
+.modal-enter-from .modal-panel,
+.modal-leave-to .modal-panel {
+  transform: translateY(100%);
+}
+
+@media (min-width: 640px) {
+  .modal-enter-from .modal-panel,
+  .modal-leave-to .modal-panel {
+    transform: scale(0.96);
+  }
 }
 
 .pop-enter-active {

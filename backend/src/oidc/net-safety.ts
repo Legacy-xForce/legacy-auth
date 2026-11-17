@@ -22,6 +22,9 @@ const V4_BLOCKS: [string, number][] = [
   ["240.0.0.0", 4], // reserved, incl. broadcast
 ];
 
+/** IPv6 literals arrive bracketed in a URL's hostname, not in plain address checks. */
+const stripBrackets = (value: string) => value.replace(/^\[|\]$/g, "");
+
 function v4ToInt(address: string): number {
   return address.split(".").reduce((acc, octet) => acc * 256 + Number(octet), 0);
 }
@@ -34,7 +37,7 @@ function inBlock(address: number, [base, bits]: [string, number]): boolean {
 
 /** Whether an IP literal is loopback, private, link-local, multicast or otherwise not a public host. */
 export function isInternalAddress(address: string): boolean {
-  const ip = address.replace(/^\[|\]$/g, "").toLowerCase();
+  const ip = stripBrackets(address).toLowerCase();
   const family = isIP(ip);
   if (family === 4) return V4_BLOCKS.some((block) => inBlock(v4ToInt(ip), block));
   if (family === 6) {
@@ -51,10 +54,10 @@ export function isInternalAddress(address: string): boolean {
 const INTERNAL_NAME = /(^localhost$)|(\.localhost$)|(\.local$)|(\.internal$)|(\.lan$)|(\.home\.arpa$)/;
 
 /** Why `url` must not be called, or null. Checks the host as written, without resolving it. */
-export function internalTargetProblem(url: string): string | null {
+export function internalTargetProblem(url: string | URL): string | null {
   let host: string;
   try {
-    host = new URL(url).hostname.toLowerCase();
+    host = (url instanceof URL ? url : new URL(url)).hostname.toLowerCase();
   } catch {
     return "is not a valid URL";
   }
@@ -73,9 +76,13 @@ export async function assertPublicTarget(
   url: string,
   resolve: (host: string) => Promise<{ address: string }[]> = (host) => lookup(host, { all: true })
 ): Promise<void> {
-  const problem = internalTargetProblem(url);
-  if (problem) throw new Error(`refusing to call ${new URL(url).origin}: ${problem}`);
-  const host = new URL(url).hostname.replace(/^\[|\]$/g, "");
+  // One parse for the check, the error message and the host we resolve.
+  let parsed: URL;
+  try { parsed = new URL(url); }
+  catch { throw new Error(`refusing to call ${url}: is not a valid URL`); }
+  const problem = internalTargetProblem(parsed);
+  if (problem) throw new Error(`refusing to call ${parsed.origin}: ${problem}`);
+  const host = stripBrackets(parsed.hostname);
   if (isIP(host)) return;
   const addresses = await resolve(host);
   const internal = addresses.find((entry) => isInternalAddress(entry.address));

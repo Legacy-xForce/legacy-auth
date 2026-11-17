@@ -8,13 +8,15 @@ import {
 import { audit, tooManyAttempts } from "../lib/audit.ts";
 import { throttleIp } from "../lib/client-ip.ts";
 import { documentOnly } from "../lib/openapi.ts";
+import { isDeprecatedEndpoint } from "../lib/deprecated.ts";
+import { readJsonObject } from "../lib/json.ts";
 import { requireAuth } from "../middleware/auth.ts";
 import type { AppEnv, Ctx } from "../lib/context.ts";
 
 export function registerPasskeyRoutes(app: OpenAPIHono<AppEnv>) {
   documentOnly(app, createRoute({
     method: "post", path: "/auth/passkey/login-options", tags: ["Passkey"],
-    summary: "Generate WebAuthn login options", deprecated: true,
+    summary: "Generate WebAuthn login options", deprecated: isDeprecatedEndpoint("post", "/auth/passkey/login-options"),
     description: "Deprecated with `/auth/login`; passkeys are an authentication method at the OpenID Provider's sign-in page.",
     requestBody: { required: false, content: { "application/json": { schema: { type: "object", properties: { username: { type: "string" } } } } } },
     responses: { "200": { description: "WebAuthn assertion options" } },
@@ -22,7 +24,7 @@ export function registerPasskeyRoutes(app: OpenAPIHono<AppEnv>) {
 
   documentOnly(app, createRoute({
     method: "post", path: "/auth/passkey/login-verify", tags: ["Passkey"],
-    summary: "Verify WebAuthn assertion and issue tokens", deprecated: true,
+    summary: "Verify WebAuthn assertion and issue tokens", deprecated: isDeprecatedEndpoint("post", "/auth/passkey/login-verify"),
     description: "Deprecated with `/auth/login`. Body is the WebAuthn assertion (`id`, `rawId`, `response`) plus an optional `audience`, as for `/auth/login`.",
     requestBody: { required: true, content: { "application/json": { schema: { type: "object" } } } },
     responses: {
@@ -67,25 +69,17 @@ export function registerPasskeyRoutes(app: OpenAPIHono<AppEnv>) {
 }
 
 async function handleLoginOptions(c: Ctx) {
-  let parsed: unknown;
-  try { parsed = c.req.raw.body === null ? {} : await c.req.json(); }
-  catch { return c.json({ error: "Malformed JSON in request body" } as any, 400); }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return c.json({ error: "A JSON object body is required" } as any, 400);
-  }
-  const body = parsed as { username?: string };
+  const parsed = await readJsonObject(c);
+  if (!parsed.ok) return parsed.response;
+  const body = parsed.value as any;
   const username = typeof body.username === "string" && body.username.trim() ? normalizeUsername(body.username) : undefined;
   return c.json(await generateLoginOptions(username) as any, 200);
 }
 
 async function handleLoginVerify(c: Ctx) {
-  let parsed: unknown;
-  try { parsed = c.req.raw.body === null ? {} : await c.req.json(); }
-  catch { return c.json({ error: "Malformed JSON in request body" } as any, 400); }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return c.json({ error: "A JSON object body is required" } as any, 400);
-  }
-  const body = parsed as any;
+  const parsed = await readJsonObject(c);
+  if (!parsed.ok) return parsed.response;
+  const body = parsed.value as any;
   const throttle = throttleKeys(throttleIp(c));
   const retryAfter = retryAfterSeconds(throttle);
   if (retryAfter !== null) {
@@ -110,13 +104,9 @@ async function handleRegisterOptions(c: Ctx) {
 
 async function handleRegisterVerify(c: Ctx) {
   const user = c.get("user");
-  let parsed: unknown;
-  try { parsed = c.req.raw.body === null ? {} : await c.req.json(); }
-  catch { return c.json({ error: "Malformed JSON in request body" } as any, 400); }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return c.json({ error: "A JSON object body is required" } as any, 400);
-  }
-  const body = parsed as any;
+  const parsed = await readJsonObject(c);
+  if (!parsed.ok) return parsed.response;
+  const body = parsed.value as any;
   try {
     const result = await verifyRegister(user.id, body);
     audit(c, { event: "passkey_register", success: true, userId: user.id, username: user.username, detail: result.credentialId });

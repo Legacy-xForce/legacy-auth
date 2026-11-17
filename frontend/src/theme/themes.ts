@@ -68,7 +68,15 @@ export const THEMES: AppTheme[] = [
   },
 ];
 
-const themeIds = new Set<string>(THEMES.map((theme) => theme.id));
+export const THEME_IDS: ThemeId[] = THEMES.map((theme) => theme.id);
+
+/** The pre-paint script in index.html repeats this rule; a test keeps them in sync. */
+export function resolvedThemeId(id: ThemeId, prefersLight: boolean): ThemeId {
+  if (id !== "adaptive") return id;
+  return prefersLight ? "catppuccin-latte" : "oled";
+}
+
+const themeIds = new Set<string>(THEME_IDS);
 const lightQuery = typeof window !== "undefined" ? window.matchMedia("(prefers-color-scheme: light)") : null;
 
 export function isThemeId(value: unknown): value is ThemeId {
@@ -90,8 +98,7 @@ export function getStoredTheme(): ThemeId {
 
 /** Adaptive is OLED in a dark system and Latte in a light one; every other theme is itself. */
 function resolveTheme(id: ThemeId): AppTheme {
-  if (id !== "adaptive") return getTheme(id);
-  return getTheme(lightQuery?.matches ? "catppuccin-latte" : "oled");
+  return getTheme(resolvedThemeId(id, lightQuery?.matches ?? false));
 }
 
 let selected: ThemeId = DEFAULT_THEME_ID;
