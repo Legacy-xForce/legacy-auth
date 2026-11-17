@@ -2,6 +2,7 @@ import { createHash } from "crypto";
 import type Provider from "oidc-provider";
 import { config } from "../config.ts";
 import { sql } from "../db.ts";
+import { log } from "../logger.ts";
 import { enqueueBackchannelRetry } from "./backchannel.ts";
 import { getClient, requiredResources } from "./clients.ts";
 import { RESOURCE_SERVERS } from "./scopes.ts";
@@ -133,7 +134,7 @@ export async function purgeExpired(): Promise<void> {
 export function startPurging(intervalMs = 60 * 60 * 1000): () => Promise<void> {
   let inFlight: Promise<void> = Promise.resolve();
   const run = () => {
-    inFlight = purgeExpired().catch((error) => console.error("[oidc] purge failed", error));
+    inFlight = purgeExpired().catch((error) => log.error("[oidc] purge failed", undefined, error));
   };
   run();
   const timer = setInterval(run, intervalMs);

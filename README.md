@@ -70,6 +70,11 @@ Optional environment variables:
 - `AVATAR_MAX_UPLOAD_BYTES` - maximum accepted profile picture upload size in bytes (default: `8388608`, i.e. 8 MiB)
 - `FRONTEND_DIST_DIR` - directory of the built frontend to serve as static files, relative to `backend/` (default: `../frontend/dist`). If missing, the backend simply serves the API and returns `404` for unknown routes.
 - `PASSKEY_ANDROID_APPS` - comma-separated `<package>:<SHA-256 signing certificate fingerprint>` entries for Android apps allowed to use this host's passkeys (see [Android apps](#android-apps)). Unset, `/.well-known/assetlinks.json` returns `404`.
+- `LOG_LEVEL` (default: `info`) - minimum level written to stdout: `trace`, `debug`, `info`, `warn`, `error`, `fatal` or `silent`.
+
+### Logging
+
+The backend prints human-readable, colourised lines to stdout. Logs go through [LogLayer](https://loglayer.dev/) with Pino as the transport and `pino-pretty` formatting (`backend/src/logger.ts`); sensitive fields (passwords, tokens, secrets) are redacted before anything is written. Hono requests get a request-scoped `c.var.logger` with a unique `requestId` and automatic incoming/completed lines from `@loglayer/hono` (`backend/src/app.ts`). The OIDC proxy bypasses Hono and logs its own line. Auth events are recorded separately in the `auth_events` table — see [Throttling and audit log](#throttling-and-audit-log).
 
 Backend environment variables go in `backend/.env` (see `backend/.env.example`). The frontend has its own `frontend/.env` for `VITE_API_URL` (see `frontend/.env.example`) — only needed for local development against a separately-running backend; leave it unset in Docker/production since the frontend is served from the same origin as the API.
 

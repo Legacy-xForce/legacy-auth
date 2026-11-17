@@ -3,6 +3,7 @@ import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type Provider from "oidc-provider";
+import { log } from "../logger.ts";
 import { startBackchannelWorker } from "./backchannel.ts";
 import { ensureDefaultClients } from "./clients.ts";
 import { requestContext } from "./context.ts";
@@ -46,7 +47,7 @@ export async function startOidcBackend(): Promise<OidcBackend> {
         if (url.pathname.startsWith("/interaction/") && (await handleInteraction(req, res, url))) return;
         await handleProvider(req, res);
       } catch (error) {
-        console.error("[oidc] unhandled error", error);
+        log.error("[oidc] unhandled error", undefined, error);
         if (!res.headersSent) {
           res.writeHead(500, { "content-type": "application/json", "cache-control": "no-store" });
         }

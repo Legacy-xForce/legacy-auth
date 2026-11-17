@@ -1,4 +1,5 @@
 import { config } from "../config.ts";
+import { log } from "../logger.ts";
 import { startOidcBackend, type OidcBackend } from "./backend.ts";
 import type { AppAudience } from "../types.ts";
 import { endUserAppAccess, endUserSessions } from "./sessions.ts";
@@ -40,7 +41,7 @@ export const oidc = {
       state = { status: "running", backend: await startOidcBackend() };
     } catch (error) {
       // Logged loudly, but the legacy login keeps working: the OP is additive.
-      console.error("[oidc] failed to start; the OpenID Provider is unavailable", error);
+      log.error("[oidc] failed to start; the OpenID Provider is unavailable", undefined, error);
       state = { status: "failed", error };
     }
   },

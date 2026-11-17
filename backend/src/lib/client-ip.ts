@@ -1,5 +1,6 @@
 import { getConnInfo } from "@hono/bun";
 import { config } from "../config.ts";
+import { log } from "../logger.ts";
 import { isPrivateAddress } from "../throttle.ts";
 import type { Ctx } from "./context.ts";
 
@@ -25,7 +26,7 @@ export function resolveClientIp(request: Request, server: PeerLookup): string | 
     const info = getConnInfo({ env: server, req: { raw: request } } as any);
     peer = info.remote.address ?? null;
   } catch (error) {
-    console.error("[conninfo] failed to read the client address", error);
+    log.error("[conninfo] failed to read the client address", undefined, error);
   }
 
   // Forwarded headers are believed only from a proxy on a private address: a

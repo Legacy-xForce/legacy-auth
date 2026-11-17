@@ -1,4 +1,5 @@
 import type Provider from "oidc-provider";
+import { log } from "../logger.ts";
 import { auditOidc } from "./audit.ts";
 import { enqueueBackchannelRetry } from "./backchannel.ts";
 import { touchSession } from "./sessions.ts";
@@ -53,10 +54,10 @@ export function registerProviderEvents(provider: Provider) {
 
   // Using a refresh token is activity: keep its browser session from idling out.
   provider.on("refresh_token.consumed", (token: { sessionUid?: string }) => {
-    touchSession(token.sessionUid).catch((error) => console.error("[oidc] could not touch session", error));
+    touchSession(token.sessionUid).catch((error) => log.error("[oidc] could not touch session", undefined, error));
   });
 
   provider.on("server_error", (_ctx: OidcCtx, error: Error) => {
-    console.error("[oidc] server error", error);
+    log.error("[oidc] server error", undefined, error);
   });
 }

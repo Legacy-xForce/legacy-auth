@@ -1,3 +1,5 @@
+import { log } from "./logger.ts";
+
 // Declared before `config`, which uses it while the module initialises.
 const DEFAULT_AUDIT_RETENTION_DAYS = 180;
 
@@ -68,7 +70,7 @@ export function parseRetentionDays(value: string | undefined): number {
   if (value === undefined || value.trim() === "") return DEFAULT_AUDIT_RETENTION_DAYS;
   const days = Number(value);
   if (!Number.isInteger(days) || days < 0) {
-    console.warn(`[config] AUDIT_RETENTION_DAYS="${value}" is not a whole number of days; using ${DEFAULT_AUDIT_RETENTION_DAYS}`);
+    log.warn(`[config] AUDIT_RETENTION_DAYS="${value}" is not a whole number of days; using ${DEFAULT_AUDIT_RETENTION_DAYS}`);
     return DEFAULT_AUDIT_RETENTION_DAYS;
   }
   return days;

@@ -1,4 +1,5 @@
 import { config } from "./config.ts";
+import { log } from "./logger.ts";
 
 const corsBaseHeaders = {
   "Access-Control-Allow-Methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD",
@@ -9,7 +10,7 @@ const corsBaseHeaders = {
 const allowedOrigins = new Set(config.corsAllowedOrigins);
 
 if (allowedOrigins.size === 0) {
-  console.warn("[cors] CORS_ALLOWED_ORIGINS not set — any web origin may call this API");
+  log.warn("[cors] CORS_ALLOWED_ORIGINS not set — any web origin may call this API");
 }
 
 export function withCorsHeaders(init: HeadersInit = {}) {

@@ -1,4 +1,5 @@
 import { config } from "../config.ts";
+import { log } from "../logger.ts";
 import { isPrivateAddress, recordFailure, retryAfterSeconds, throttleKeys } from "../throttle.ts";
 
 /** Paths the OP serves. Everything else on this service is the legacy API or the console. */
@@ -87,7 +88,7 @@ export async function proxyToOidc(request: Request, socketPath: string, ip: stri
       unix: socketPath,
     } as RequestInit);
   } catch (error) {
-    console.error("[oidc] backend unreachable", error);
+    log.error("[oidc] backend unreachable", undefined, error);
     return hardened(json(503, { error: "temporarily_unavailable" }), url.pathname);
   }
 

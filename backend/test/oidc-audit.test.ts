@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { config } from "../src/config.ts";
+import { log } from "../src/logger.ts";
 import { call, createTestUser, loginOk, startApp, testSql, type TestApp, type TestUser } from "./helpers.ts";
 import { Browser, ISSUER_ORIGIN, basicAuth, pkce, refreshRequest, registerClient, signInAndRedeem, tokenRequest, useStubFrontend } from "./oidc-helpers.ts";
 
@@ -216,15 +217,15 @@ describe("the audit log is usable and safe", () => {
   test("a failure to write an audit row never breaks the request", async () => {
     const user = await createTestUser({ scopes: both });
     await testSql`ALTER TABLE auth_events RENAME TO auth_events_away`;
-    const originalError = console.error;
-    console.error = () => {};
+    const originalError = log.error;
+    log.error = () => {};
     try {
       const { tokens } = await signInAndRedeem(app, new Browser(app), await registerClient(), user);
       expect(tokens.status).toBe(200);
     } finally {
       // the last events are written in the background; let them fail before the table is put back
       await new Promise((resolve) => setTimeout(resolve, 400));
-      console.error = originalError;
+      log.error = originalError;
       await testSql`ALTER TABLE auth_events_away RENAME TO auth_events`;
     }
   });

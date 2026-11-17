@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import { statSync } from "fs";
 import { dirname } from "path";
 import { config } from "../src/config.ts";
+import { log } from "../src/logger.ts";
 import { oidc } from "../src/oidc/index.ts";
 import { isOidcPath } from "../src/oidc/proxy.ts";
 import { call, createTestUser, login, startApp, testSql, type TestApp } from "./helpers.ts";
@@ -128,12 +129,12 @@ describe("when the OP cannot start", () => {
     await oidc.stop();
     process.env.TMPDIR = "/nonexistent/directory/for/the/socket"; // the socket cannot be created
     const errors: unknown[] = [];
-    const originalError = console.error;
-    console.error = (...args: unknown[]) => errors.push(args);
+    const originalError = log.error;
+    log.error = (...args: unknown[]) => { errors.push(args); };
     try {
       await oidc.start();
     } finally {
-      console.error = originalError;
+      log.error = originalError;
     }
     try {
       expect(oidc.running).toBe(false);

@@ -1,5 +1,6 @@
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, type KeyObject } from "crypto";
 import { config } from "./config.ts";
+import { log } from "./logger.ts";
 
 type JwkPublicKey = { kty: string; crv: string; x: string; y: string };
 
@@ -20,7 +21,7 @@ if (config.jwtPrivateKeyPem) {
 } else {
   const pair = generateKeyPairSync("ec", { namedCurve: "P-256" });
   privateKey = pair.privateKey;
-  console.warn("[keys] JWT_PRIVATE_KEY not set — using ephemeral key pair; tokens will be invalidated on restart");
+  log.warn("[keys] JWT_PRIVATE_KEY not set — using ephemeral key pair; tokens will be invalidated on restart");
 }
 
 publicKey = createPublicKey(privateKey);

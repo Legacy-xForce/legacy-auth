@@ -1,5 +1,6 @@
 import { config } from "./config.ts";
 import { pruneAuthEvents } from "./db.ts";
+import { log } from "./logger.ts";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -8,7 +9,7 @@ export async function pruneAuditNow(retentionDays = config.auditRetentionDays): 
   if (retentionDays <= 0) return 0;
   const removed = await pruneAuthEvents(retentionDays);
   if (removed > 0) {
-    console.log(`[audit] pruned ${removed} auth_events older than ${retentionDays} days`);
+    log.info("[audit] pruned auth events", { removed, retentionDays });
   }
   return removed;
 }
@@ -16,7 +17,7 @@ export async function pruneAuditNow(retentionDays = config.auditRetentionDays): 
 /** Prunes now and then once a day; returns a function that stops the schedule. */
 export function startAuditPruning(intervalMs = DAY_MS): () => void {
   const run = () => {
-    pruneAuditNow().catch((error) => console.error("[audit] pruning failed", error));
+    pruneAuditNow().catch((error) => log.error("[audit] pruning failed", undefined, error));
   };
   run();
   const timer = setInterval(run, intervalMs);

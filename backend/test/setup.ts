@@ -30,6 +30,8 @@ const avatarDir = mkdtempSync(join(tmpdir(), "legacy-auth-avatars-"));
 const { privateKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
 
 process.env.NODE_ENV = "test";
+// Keep the test output readable; log calls are still made (and asserted on) via the facade.
+process.env.LOG_LEVEL = "fatal";
 process.env.DATABASE_URL = databaseUrl.toString();
 process.env.JWT_SECRET = randomBytes(32).toString("hex");
 process.env.JWT_PRIVATE_KEY = privateKey.export({ type: "pkcs8", format: "pem" }) as string;

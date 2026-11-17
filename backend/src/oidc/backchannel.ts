@@ -1,6 +1,7 @@
 import type Provider from "oidc-provider";
 import { config } from "../config.ts";
 import { sql } from "../db.ts";
+import { log } from "../logger.ts";
 import { auditOidc } from "./audit.ts";
 
 type RetryRow = { id: string; client_id: string; account_id: string; sid: string; attempts: number };
@@ -71,7 +72,7 @@ export function startBackchannelWorker(provider: Provider): () => Promise<void> 
     if (current) return;
     current = processDueRetries(provider)
       .then(() => undefined)
-      .catch((error) => console.error("[oidc] back-channel retry worker failed", error))
+      .catch((error) => log.error("[oidc] back-channel retry worker failed", undefined, error))
       .finally(() => {
         current = null;
       });

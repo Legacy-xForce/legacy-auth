@@ -1,5 +1,6 @@
 import { UUID_PATTERN } from "../avatars.ts";
 import { findUserById, insertAuthEvent } from "../db.ts";
+import { log } from "../logger.ts";
 import { currentRequest } from "./context.ts";
 
 /**
@@ -24,6 +25,6 @@ export async function auditOidc(entry: { event: string; success: boolean; userId
       userAgent,
     });
   } catch (error) {
-    console.error("[audit] failed to record OIDC event", error);
+    log.error("[audit] failed to record OIDC event", undefined, error);
   }
 }
