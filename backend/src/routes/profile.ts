@@ -114,7 +114,7 @@ async function handleGetProfilePicture(c: Ctx) {
   if (!UUID_PATTERN.test(userId)) return c.json({ error: "Invalid user id" } as any, 400);
   const avatar = await findAvatar(userId);
   if (!avatar) return c.json({ error: "Not found" } as any, 404);
-  return await serveStaticFile(Bun.file(avatar.path), c.req.raw, withCorsHeaders({
+  return await serveStaticFile(c, Bun.file(avatar.path), withCorsHeaders({
     "Content-Type": avatar.contentType,
     "Cache-Control": "public, max-age=300",
   }));

@@ -5,6 +5,7 @@
  * write, so a replaced avatar or rebuilt frontend asset gets a new ETag without
  * having to hash the whole file on each request.
  */
+import type { Ctx } from "./lib/context.ts";
 
 type File = ReturnType<typeof Bun.file>;
 
@@ -19,14 +20,15 @@ function matchesIfNoneMatch(header: string | null, etag: string): boolean {
   return header.split(",").some((candidate) => candidate.trim().replace(/^W\//i, "") === etag);
 }
 
-export async function serveStaticFile(file: File, request: Request, headers: HeadersInit = {}): Promise<Response> {
+export async function serveStaticFile(c: Ctx, file: File, headers: HeadersInit = {}): Promise<Response> {
   const responseHeaders = new Headers(headers);
   const etag = fileEtag(file);
   responseHeaders.set("ETag", etag);
 
-  if (matchesIfNoneMatch(request.headers.get("if-none-match"), etag)) {
-    return new Response(null, { status: 304, headers: responseHeaders });
+  const record = Object.fromEntries(responseHeaders.entries()) as Record<string, string>;
+  if (matchesIfNoneMatch(c.req.header("if-none-match") ?? null, etag)) {
+    return c.newResponse(null, 304, record);
   }
 
-  return new Response(file, { status: 200, headers: responseHeaders });
+  return c.newResponse(file as any, 200, record);
 }

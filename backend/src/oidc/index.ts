@@ -3,11 +3,13 @@ import { log } from "../logger.ts";
 import { startOidcBackend, type OidcBackend } from "./backend.ts";
 import type { AppAudience } from "../types.ts";
 import { endUserAppAccess, endUserSessions } from "./sessions.ts";
-import { isOidcPath, proxyToOidc } from "./proxy.ts";
+import { createOidcProxyApp, isOidcPath } from "./proxy.ts";
 
 type State = { status: "stopped" } | { status: "running"; backend: OidcBackend } | { status: "failed"; error: unknown };
 
 const NOT_RUNNING = "the OpenID Provider is not running";
+
+const proxyApp = createOidcProxyApp();
 
 let state: State = { status: "stopped" };
 
@@ -53,12 +55,11 @@ export const oidc = {
     state = { status: "stopped" };
   },
 
-  handle(request: Request, ip: string | null): Promise<Response> | Response {
-    if (state.status === "running") return proxyToOidc(request, state.backend.socketPath, ip);
-    const failed = state.status === "failed";
-    return new Response(JSON.stringify({ error: failed ? "temporarily_unavailable" : "Not found" }), {
-      status: failed ? 503 : 404,
-      headers: { "content-type": "application/json", "cache-control": "no-store" },
+  async handle(request: Request, ip: string | null): Promise<Response> {
+    return await proxyApp.fetch(request, {
+      socketPath: state.status === "running" ? state.backend.socketPath : "",
+      ip,
+      status: state.status,
     });
   },
 

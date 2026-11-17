@@ -1,5 +1,5 @@
 import { chmodSync, mkdtempSync, rmSync } from "node:fs";
-import { createServer, type Server } from "node:http";
+import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type Provider from "oidc-provider";
@@ -8,7 +8,7 @@ import { startBackchannelWorker } from "./backchannel.ts";
 import { ensureDefaultClients } from "./clients.ts";
 import { requestContext } from "./context.ts";
 import { registerProviderEvents } from "./events.ts";
-import { createInteractionHandler } from "./interaction.ts";
+import { createInteractionApp } from "./interaction.ts";
 import { createProvider } from "./provider.ts";
 import { startPurging } from "./sessions.ts";
 
@@ -20,6 +20,27 @@ export type OidcBackend = {
 };
 
 const first = (value: string | string[] | undefined) => (Array.isArray(value) ? value[0] : value);
+
+/** Hono only needs the method, path and headers to route; the body stays on the Node request. */
+function toRequest(req: IncomingMessage, url: URL): Request {
+  const headers = new Headers();
+  for (const [name, value] of Object.entries(req.headers)) {
+    if (value === undefined) continue;
+    for (const item of Array.isArray(value) ? value : [value]) headers.append(name, item);
+  }
+  return new Request(url.href, { method: req.method ?? "GET", headers });
+}
+
+/** The Node socket boundary: write Hono's response to the library's server response. */
+async function writeResponse(res: ServerResponse, response: Response): Promise<void> {
+  const headers = new Headers(response.headers);
+  const cookies = headers.getSetCookie?.() ?? [];
+  headers.delete("set-cookie");
+  res.writeHead(response.status, Object.fromEntries(headers.entries()));
+  for (const cookie of cookies) res.appendHeader("Set-Cookie", cookie);
+  if (response.body) res.end(Buffer.from(await response.arrayBuffer()));
+  else res.end();
+}
 
 /**
  * Runs oidc-provider, which is a Node `http` handler, next to the Bun server.
@@ -33,7 +54,7 @@ export async function startOidcBackend(): Promise<OidcBackend> {
   await ensureDefaultClients();
 
   const handleProvider = provider.callback();
-  const handleInteraction = createInteractionHandler(provider);
+  const interactionApp = createInteractionApp(provider);
 
   const directory = mkdtempSync(join(tmpdir(), "legacy-auth-oidc-"));
   chmodSync(directory, 0o700);
@@ -44,7 +65,10 @@ export async function startOidcBackend(): Promise<OidcBackend> {
     requestContext.run(context, async () => {
       try {
         const url = new URL(req.url ?? "/", "http://internal");
-        if (url.pathname.startsWith("/interaction/") && (await handleInteraction(req, res, url))) return;
+        if (url.pathname.startsWith("/interaction/")) {
+          await writeResponse(res, await interactionApp.fetch(toRequest(req, url), { nodeReq: req, nodeRes: res, provider }));
+          return;
+        }
         await handleProvider(req, res);
       } catch (error) {
         log.error("[oidc] unhandled error", undefined, error);

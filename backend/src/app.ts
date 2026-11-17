@@ -2,7 +2,7 @@ import { honoLogLayer } from "@loglayer/hono";
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { HTTPException } from "hono/http-exception";
 import { log, logLayer } from "./logger.ts";
-import { applyCorsOrigin, createCorsPreflightResponse } from "./cors.ts";
+import { applyCorsOrigin, withCorsHeaders } from "./cors.ts";
 import { clientIp, resolveClientIp, type PeerLookup } from "./lib/client-ip.ts";
 import type { AppEnv } from "./lib/context.ts";
 import { registerRoutes } from "./routes/index.ts";
@@ -60,6 +60,16 @@ function createApp() {
     return c.json({ error: "Internal server error" }, 500);
   });
 
+  // Preflight for the legacy API/console lives in Hono like every other route.
+  // The OP owns its own CORS, and its paths are dispatched before app.fetch.
+  app.options("*", (c) => {
+    const requestedHeaders = c.req.header("access-control-request-headers");
+    const headers = withCorsHeaders({ "Access-Control-Max-Age": "86400" });
+    // Echoed rather than "*": a wildcard does not cover Authorization.
+    if (requestedHeaders) headers.set("Access-Control-Allow-Headers", requestedHeaders);
+    return c.body(null, 204, Object.fromEntries(headers.entries()));
+  });
+
   registerRoutes(app);
   return app;
 }
@@ -76,8 +86,6 @@ export async function handleRequest(request: Request, server: PeerLookup): Promi
     log.info("oidc request", { method: request.method, path: url.pathname, status: response.status });
     return response;
   }
-  if (request.method === "OPTIONS") return applyCorsOrigin(request, createCorsPreflightResponse(request));
-
   // Pass the Bun server as Hono's environment so getConnInfo() can read the peer.
   const response = markDeprecated(request, await app.fetch(request, server));
   return applyCorsOrigin(request, response);

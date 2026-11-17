@@ -7,7 +7,7 @@ import { assetLinks } from "../asset-links.ts";
 import { JwksResponse } from "../schemas.ts";
 import { applyDocOverlay } from "../docs-overlay.ts";
 import { serveStaticFile } from "../static.ts";
-import type { AppEnv } from "../lib/context.ts";
+import type { AppEnv, Ctx } from "../lib/context.ts";
 
 export function registerMetaRoutes(app: OpenAPIHono<AppEnv>) {
   app.openapi(
@@ -62,20 +62,20 @@ export function registerMetaRoutes(app: OpenAPIHono<AppEnv>) {
     ) {
       return c.json({ error: "Not found" } as any, 404);
     }
-    const staticResponse = await tryServeFrontend(pathname, c.req.raw);
+    const staticResponse = await tryServeFrontend(c, pathname);
     return staticResponse ?? c.json({ error: "Not found" } as any, 404);
   });
 }
 
-async function tryServeFrontend(pathname: string, request: Request): Promise<Response | null> {
+async function tryServeFrontend(c: Ctx, pathname: string): Promise<Response | null> {
   let decoded: string;
   try { decoded = decodeURIComponent(pathname); }
   catch { return null; }
   const relative = normalize(decoded).replace(/^(\.\.[/\\])+/, "").replace(/^\/+/, "");
   const candidate = join(config.frontendDistDir, relative || "index.html");
   const file = Bun.file(candidate);
-  if (await file.exists()) return await serveStaticFile(file, request);
+  if (await file.exists()) return await serveStaticFile(c, file);
   const indexFile = Bun.file(join(config.frontendDistDir, "index.html"));
-  if (await indexFile.exists()) return await serveStaticFile(indexFile, request);
+  if (await indexFile.exists()) return await serveStaticFile(c, indexFile);
   return null;
 }
