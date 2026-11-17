@@ -31,6 +31,9 @@ const ROUTES: ProxyRoute[] = [
 export const isOidcPath = (pathname: string) =>
   ROUTES.some((route) => (route.prefix ? pathname.startsWith(route.path) : pathname === route.path));
 
+/** The same paths as Hono route patterns, so the front door registers them instead of branching on the URL. */
+export const OIDC_ROUTE_PATTERNS = ROUTES.map((route) => (route.prefix ? `${route.path}*` : route.path));
+
 // What the client could have forged. The proxy states each of these itself.
 const STRIPPED_REQUEST_HEADERS = ["x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "x-forwarded-port", "x-real-ip", "forwarded", "x-client-ip", "host"];
 

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { config } from "../src/config.ts";
 import { findUserById, insertAuthEvent, listAuthEvents, listUsersPaginated, updateUserPasswordHash, upgradeLegacyPasswordHash } from "../src/db.ts";
 import { toCachedUser } from "../src/cache.ts";
-import { isDeprecatedEndpoint, markDeprecated, DEPRECATED_ENDPOINTS } from "../src/lib/deprecated.ts";
+import { isDeprecatedEndpoint, DEPRECATED_ENDPOINTS } from "../src/lib/deprecated.ts";
 import { toPublicUser } from "../src/lib/public-user.ts";
 import { tokenResponse } from "../src/lib/tokens.ts";
 import { checkPasswordLogin } from "../src/oidc/credentials.ts";
@@ -11,7 +11,7 @@ import { assertPublicTarget, internalTargetProblem } from "../src/oidc/net-safet
 import { issuerOrigin, issuerUrl } from "../src/oidc/origin.ts";
 import { APP_AUDIENCES, type UserRecord } from "../src/types.ts";
 import { RESOURCE_SERVERS, resourceForAudience, seedScopes, SUPPORTED_SCOPES } from "../src/oidc/scopes.ts";
-import { createTestUser, loginOk, startApp, testSql } from "./helpers.ts";
+import { call, createTestUser, loginOk, startApp, testSql } from "./helpers.ts";
 
 const record = (overrides: Partial<UserRecord> = {}): UserRecord => ({
   id: "8f14e45f-ceea-467e-bb92-42f2c1e6b6d1",
@@ -123,13 +123,18 @@ describe("deprecation metadata", () => {
     expect(isDeprecatedEndpoint("POST", "/auth/refresh")).toBe(false);
   });
 
-  test("markDeprecated adds headers only to those endpoints", () => {
-    const marked = markDeprecated(new Request("https://auth.test.local/auth/login", { method: "POST" }), new Response());
-    expect(marked.headers.get("deprecation")).toBe("true");
-    expect(marked.headers.get("link")).toContain(`${config.jwtIssuer}/.well-known/openid-configuration`);
+  test("the deprecation middleware adds headers only to those endpoints", async () => {
+    const app = startApp();
+    try {
+      const marked = await call(app, "POST", "/auth/login", { json: {} });
+      expect(marked.headers.get("deprecation")).toBe("true");
+      expect(marked.headers.get("link")).toContain(`${config.jwtIssuer}/.well-known/openid-configuration`);
 
-    const plain = markDeprecated(new Request("https://auth.test.local/auth/refresh", { method: "POST" }), new Response());
-    expect(plain.headers.has("deprecation")).toBe(false);
+      const plain = await call(app, "POST", "/auth/refresh", { json: {} });
+      expect(plain.headers.has("deprecation")).toBe(false);
+    } finally {
+      app.stop();
+    }
   });
 });
 

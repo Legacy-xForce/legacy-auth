@@ -3,7 +3,7 @@ import { createOidcAdminRouter } from "../oidc/admin.ts";
 import { OidcClient, CreateOidcClientRequest, UpdateOidcClientRequest, OidcTokenRequest } from "../schemas.ts";
 import { documentSchema } from "../lib/openapi.ts";
 import { requireAdmin } from "../middleware/auth.ts";
-import type { AppEnv, Ctx } from "../lib/context.ts";
+import type { AppEnv } from "../lib/context.ts";
 
 const clientIdParam: Array<{ name: string; in: "path"; required: boolean; schema: { type: "string" } }> = [
   { name: "clientId", in: "path", required: true, schema: { type: "string" } },
@@ -82,13 +82,10 @@ export function registerOidcAdminRoutes(app: OpenAPIHono<AppEnv>) {
     responses: { "200": { description: "The client" }, "404": { description: "Unknown client" }, "409": { description: "The client has no secret yet" } },
   }));
 
-  // Hono's `/admin/oidc/*` also matches `/admin/oidc` without the slash; the
-  // original router only handled the prefixed form and 404'd the bare path.
-  const oidcAdminGuard = async (c: Ctx, next: () => Promise<void>) => {
-    if (!new URL(c.req.url).pathname.startsWith("/admin/oidc/")) return next();
-    return requireAdmin(c, next);
-  };
-  app.use("/admin/oidc/*", oidcAdminGuard as any);
+  // Scope the guard with Hono path patterns, not a pathname check: the bare
+  // `/admin/oidc` stays a plain 404, and only registry routes need an admin.
+  app.use("/admin/oidc/clients", requireAdmin as any);
+  app.use("/admin/oidc/clients/*", requireAdmin as any);
   // Hono owns path and method dispatch inside the registry now; the handlers'
   // field validation and exact error messages are unchanged.
   app.route("/admin/oidc", createOidcAdminRouter() as any);

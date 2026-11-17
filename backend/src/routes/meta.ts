@@ -50,19 +50,17 @@ export function registerMetaRoutes(app: OpenAPIHono<AppEnv>) {
     cdn: "https://cdn.jsdelivr.net/npm/@scalar/api-reference@1.80.0",
   }));
 
-  // Frontend catch-all must be registered last. Never let an unmatched API,
-  // well-known, or docs path fall through to the SPA.
+  // Hono routes the "no such API path" cases explicitly, so the SPA catch-all
+  // below never has to inspect the pathname itself. These are registered after
+  // every real route, and before the catch-all.
+  const apiNotFound = (c: Ctx) => c.json({ error: "Not found" } as any, 404);
+  app.all("/auth/*", apiNotFound);
+  app.all("/admin/*", apiNotFound);
+  app.all("/.well-known/*", apiNotFound);
+  app.all("/docs/*", apiNotFound);
+
   app.get("*", async (c) => {
-    const pathname = new URL(c.req.url).pathname;
-    if (
-      pathname.startsWith("/auth/") ||
-      pathname.startsWith("/admin/") ||
-      pathname.startsWith("/.well-known/") ||
-      pathname.startsWith("/docs/")
-    ) {
-      return c.json({ error: "Not found" } as any, 404);
-    }
-    const staticResponse = await tryServeFrontend(c, pathname);
+    const staticResponse = await tryServeFrontend(c, c.req.path);
     return staticResponse ?? c.json({ error: "Not found" } as any, 404);
   });
 }

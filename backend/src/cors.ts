@@ -1,3 +1,4 @@
+import type { Context } from "hono";
 import { config } from "./config.ts";
 import { log } from "./logger.ts";
 
@@ -22,20 +23,18 @@ export function withCorsHeaders(init: HeadersInit = {}) {
 }
 
 /**
- * Sets `Access-Control-Allow-Origin` on a finished response. With an allowlist
- * the request's origin is echoed only when listed; other origins get no header,
- * so the browser refuses to hand them the response.
+ * Sets Access-Control-Allow-Origin on a finished Hono response. With an
+ * allowlist the request's origin is echoed only when listed; other origins get
+ * no header, so the browser refuses to hand them the response.
  */
-export function applyCorsOrigin(request: Request, response: Response): Response {
+export function applyCorsOrigin(c: Context): void {
   if (allowedOrigins.size === 0) {
-    response.headers.set("Access-Control-Allow-Origin", "*");
-    return response;
+    c.res.headers.set("Access-Control-Allow-Origin", "*");
+    return;
   }
-  response.headers.append("Vary", "Origin");
-  const origin = request.headers.get("origin");
+  c.res.headers.append("Vary", "Origin");
+  const origin = c.req.header("origin");
   if (origin && allowedOrigins.has(origin)) {
-    response.headers.set("Access-Control-Allow-Origin", origin);
+    c.res.headers.set("Access-Control-Allow-Origin", origin);
   }
-  return response;
 }
-
