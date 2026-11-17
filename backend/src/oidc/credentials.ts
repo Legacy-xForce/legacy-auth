@@ -1,5 +1,5 @@
 import { invalidateCachedUser } from "../cache.ts";
-import { findUserByUsername, updateUserPasswordHash } from "../db.ts";
+import { findUserByUsername, upgradeLegacyPasswordHash } from "../db.ts";
 import { clearUserFailures, recordFailure, retryAfterSeconds, throttleKeys } from "../throttle.ts";
 import type { UserRecord } from "../types.ts";
 import { normalizeUsername } from "../usernames.ts";
@@ -38,11 +38,11 @@ export async function checkPasswordLogin(username: string, password: string, ip:
   if (!(await Bun.password.verify(password, user.password_hash))) return fail(401, "Invalid credentials", user.id);
 
   clearUserFailures(normalizedUsername);
-  // Same upgrade /auth/login does: bcrypt hashes become Argon2 on a successful sign-in.
-  if (user.password_hash.startsWith("$2")) {
-    const upgraded = await updateUserPasswordHash(user.id, await Bun.password.hash(password));
+  // Shared with /auth/login: bcrypt hashes become Argon2 on a successful sign-in.
+  const upgraded = await upgradeLegacyPasswordHash(user, password);
+  if (upgraded) {
     invalidateCachedUser(normalizedUsername);
-    if (upgraded) return { ok: true, user: upgraded };
+    return { ok: true, user: upgraded };
   }
   return { ok: true, user };
 }

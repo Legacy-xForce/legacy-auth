@@ -16,18 +16,14 @@ import {
   Eye,
   EyeOff,
   Fingerprint,
-  Info,
-  KeyRound,
   LoaderCircle,
   Lock,
   LogOut,
   MapPin,
   Palette,
-  Pencil,
   Plus,
   Search,
   Settings,
-  Shield,
   ShieldCheck,
   Trash2,
   TriangleAlert,
@@ -37,7 +33,7 @@ import {
   X,
 } from "lucide-vue-next";
 
-const props = withDefaults(defineProps<{ name: string; size?: number; strokeWidth?: number }>(), { size: 16, strokeWidth: 2 });
+const props = withDefaults(defineProps<{ name: string; size?: number }>(), { size: 16 });
 
 // Bundled with the app, so icons render on the first paint without a network request.
 const icons: Record<string, Component> = {
@@ -57,18 +53,14 @@ const icons: Record<string, Component> = {
   eye: Eye,
   eyeOff: EyeOff,
   fingerprint: Fingerprint,
-  info: Info,
-  key: KeyRound,
   loader: LoaderCircle,
   lock: Lock,
   logout: LogOut,
   mapPin: MapPin,
   palette: Palette,
-  pencil: Pencil,
   plus: Plus,
   search: Search,
   settings: Settings,
-  shield: Shield,
   shieldCheck: ShieldCheck,
   trash: Trash2,
   user: User,
@@ -81,11 +73,5 @@ if (import.meta.env.DEV && !icons[props.name]) console.warn(`Unknown icon "${pro
 </script>
 
 <template>
-  <component
-    :is="icons[name] ?? CircleAlert"
-    :size="size"
-    :stroke-width="strokeWidth"
-    :class="{ 'animate-spin': name === 'loader' }"
-    aria-hidden="true"
-  />
+  <component :is="icons[name] ?? CircleAlert" :size="size" :class="{ 'animate-spin': name === 'loader' }" aria-hidden="true" />
 </template>

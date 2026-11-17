@@ -1,22 +1,24 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
+import { Hono, type Context, type Next } from "hono";
 import type Provider from "oidc-provider";
 import { config } from "../config.ts";
 import { findUserById } from "../db.ts";
 import { generateLoginOptions, verifyAssertion } from "../passkey.ts";
 import { isPrivateAddress, recordFailure, retryAfterSeconds, throttleKeys } from "../throttle.ts";
+import { normalizeUsername } from "../usernames.ts";
 import { auditOidc } from "./audit.ts";
 import { checkPasswordLogin } from "./credentials.ts";
-import { ACR_BASIC } from "./provider.ts";
+import { issuerOrigin } from "./origin.ts";
 import { errorPage, STATIC_PAGE_CSP } from "./pages.ts";
+import { ACR_BASIC } from "./provider.ts";
 import { ADMIN_SCOPE, entitledResourceScopes, mayUseAdminScope, RESOURCE_SERVERS } from "./scopes.ts";
-import { normalizeUsername } from "../usernames.ts";
 
 /**
  * The sign-in screens the provider redirects to (`/interaction/:uid`).
  *
  * The page itself is the console's Vue app (its /interaction/:uid route); this
- * file answers the page's JSON calls and finishes the interaction. Consent is
+ * Hono app answers the page's JSON calls and finishes the interaction. Consent is
  * not a screen: every client is a first-party app, so a request is granted
  * automatically when the signed-in user may have what it asks for, and refused
  * with `access_denied` when not (the OP's version of `403`).
@@ -31,21 +33,20 @@ const MAX_BODY_BYTES = 16 * 1024;
 
 type Details = Awaited<ReturnType<Provider["interactionDetails"]>>;
 
-function send(res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}) {
-  res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store", pragma: "no-cache", ...headers });
-  res.end(JSON.stringify(body));
-}
+type InteractionEnv = {
+  // The library reads cookies from the Node request and may set them on the Node
+  // response; Hono owns everything about the HTTP answer returned to the browser.
+  Bindings: { nodeReq: IncomingMessage; nodeRes: ServerResponse; provider: Provider };
+  Variables: { details: Details; body: Record<string, any> };
+};
+type ICtx = Context<InteractionEnv>;
 
-function sendHtml(res: ServerResponse, status: number, html: string, headers: Record<string, string> = {}) {
-  res.writeHead(status, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", pragma: "no-cache", ...headers });
-  res.end(html);
-}
-
-async function readJson(req: IncomingMessage): Promise<Record<string, any> | null> {
+async function readJson(c: ICtx): Promise<Record<string, any> | null> {
+  const stream = c.env.nodeReq;
   const chunks: Buffer[] = [];
   let size = 0;
-  for await (const chunk of req) {
-    size += chunk.length;
+  for await (const chunk of stream) {
+    size += (chunk as Buffer).length;
     if (size > MAX_BODY_BYTES) return null;
     chunks.push(chunk as Buffer);
   }
@@ -57,17 +58,12 @@ async function readJson(req: IncomingMessage): Promise<Record<string, any> | nul
   }
 }
 
-const header = (req: IncomingMessage, name: string) => {
-  const value = req.headers[name];
-  return Array.isArray(value) ? value[0] : value;
-};
-
 /** The client address the front end vouches for (it overwrites the header on every request). */
-const clientIp = (req: IncomingMessage) => header(req, "x-client-ip") ?? null;
+const clientIp = (c: ICtx) => c.req.header("x-client-ip") ?? null;
 
 /** The address to count failures against, or null when it is just a proxy's. */
-const throttleIp = (req: IncomingMessage) => {
-  const ip = clientIp(req);
+const throttleIp = (c: ICtx) => {
+  const ip = clientIp(c);
   return ip && !isPrivateAddress(ip) ? ip : null;
 };
 
@@ -78,55 +74,62 @@ const throttleIp = (req: IncomingMessage) => {
  * (SameSite=Lax, bound to this uid) is a third line, and a JSON body means the
  * request is not a "simple" cross-site one.
  */
-function sameOriginJson(req: IncomingMessage): string | null {
-  const origin = header(req, "origin");
-  if (origin !== new URL(config.jwtIssuer).origin) return "Cross-origin request refused";
-  const site = header(req, "sec-fetch-site");
+function sameOriginJson(c: ICtx): string | null {
+  if (c.req.header("origin") !== issuerOrigin) return "Cross-origin request refused";
+  const site = c.req.header("sec-fetch-site");
   if (site && site !== "same-origin") return "Cross-site request refused";
-  if (!(header(req, "content-type") ?? "").toLowerCase().startsWith("application/json")) return "Content-Type must be application/json";
+  if (!(c.req.header("content-type") ?? "").toLowerCase().startsWith("application/json")) return "Content-Type must be application/json";
   return null;
 }
 
-async function sendSpa(res: ServerResponse) {
-  const index = Bun.file(join(config.frontendDistDir, "index.html"));
-  if (!(await index.exists())) {
-    return sendHtml(res, 503, errorPage({ error: "temporarily_unavailable", error_description: "The sign-in page is not built" }), {
-      "content-security-policy": STATIC_PAGE_CSP,
-    });
-  }
-  sendHtml(res, 200, await index.text(), { "content-security-policy": "frame-ancestors 'none'" });
-}
+const expired = (c: ICtx, wantsHtml: boolean) =>
+  wantsHtml
+    ? c.html(errorPage({ error: "interaction_expired", error_description: "This sign-in link has expired or was already used" }), 400, {
+        "content-security-policy": STATIC_PAGE_CSP,
+      })
+    : c.json({ error: "interaction_expired" }, 410);
 
-export function createInteractionHandler(provider: Provider) {
-  const expired = (res: ServerResponse, wantsHtml: boolean) =>
-    wantsHtml
-      ? sendHtml(res, 400, errorPage({ error: "interaction_expired", error_description: "This sign-in link has expired or was already used" }), {
-          "content-security-policy": STATIC_PAGE_CSP,
-        })
-      : send(res, 410, { error: "interaction_expired" });
+export function createInteractionApp(provider: Provider): Hono<InteractionEnv> {
+  const app = new Hono<InteractionEnv>();
 
-  async function detailsFor(req: IncomingMessage, res: ServerResponse, uid: string, wantsHtml: boolean): Promise<Details | null> {
+  app.notFound((c) => c.json({ error: "Not found" }, 404));
+
+  // The old path regex refused malformed uids with a 404. Hono's `:uid` matches
+  // any segment, so validate it once as param middleware.
+  const validUid = async (c: ICtx, next: Next) => {
+    if (!UID.test(c.req.param("uid") ?? "")) return c.json({ error: "Not found" }, 404);
+    await next();
+  };
+  app.use("/interaction/:uid", validUid);
+  app.use("/interaction/:uid/*", validUid);
+
+  async function detailsFor(c: ICtx, wantsHtml: boolean): Promise<Details | Response> {
     try {
-      const details = await provider.interactionDetails(req, res);
+      const details = await provider.interactionDetails(c.env.nodeReq, c.env.nodeRes);
       // The cookie must belong to the interaction in the URL, not to some other one.
-      if (details.uid === uid) return details;
+      if (details.uid === c.req.param("uid")) return details;
     } catch {
       // no cookie, or the interaction expired
     }
-    expired(res, wantsHtml);
-    return null;
+    return expired(c, wantsHtml);
   }
+
+  const loadDetails = (wantsHtml: boolean) => async (c: ICtx, next: Next) => {
+    const result = await detailsFor(c, wantsHtml);
+    if (result instanceof Response) return result;
+    c.set("details", result);
+    await next();
+  };
 
   /** Ends the interaction by sending the user back to the client with an error. */
-  async function refuse(req: IncomingMessage, res: ServerResponse, description: string): Promise<string> {
-    return provider.interactionResult(req, res, { error: "access_denied", error_description: description }, { mergeWithLastSubmission: false });
-  }
+  const refuse = (c: ICtx, description: string) =>
+    provider.interactionResult(c.env.nodeReq, c.env.nodeRes, { error: "access_denied", error_description: description }, { mergeWithLastSubmission: false });
 
   /** Grants what the client asked for if the signed-in user may have it; otherwise returns the refusal's redirect. */
-  async function consent(req: IncomingMessage, res: ServerResponse, details: Details): Promise<string> {
+  async function consent(c: ICtx, details: Details): Promise<string> {
     const accountId = details.session?.accountId;
     const user = accountId ? await findUserById(accountId) : null;
-    if (!user || !user.active) return refuse(req, res, "The account is not available");
+    if (!user || !user.active) return refuse(c, "The account is not available");
 
     const prompt = details.prompt.details as {
       missingOIDCScope?: string[];
@@ -136,7 +139,7 @@ export function createInteractionHandler(provider: Provider) {
 
     const deny = async (reason: string) => {
       await auditOidc({ event: "oidc.consent", success: false, userId: user.id, detail: `${details.params.client_id}: ${reason}` });
-      return refuse(req, res, reason);
+      return refuse(c, reason);
     };
 
     if (prompt.missingOIDCScope?.includes(ADMIN_SCOPE) && !mayUseAdminScope(user)) return deny("The admin scope requires an admin account");
@@ -185,129 +188,115 @@ export function createInteractionHandler(provider: Provider) {
     for (const [indicator, scopes] of granted) grant.addResourceScope(indicator, scopes.join(" "));
 
     const grantId = await grant.save();
-    return provider.interactionResult(req, res, { consent: { grantId } }, { mergeWithLastSubmission: true });
+    return provider.interactionResult(c.env.nodeReq, c.env.nodeRes, { consent: { grantId } }, { mergeWithLastSubmission: true });
   }
 
-  /** Returns true when the request was one of ours. */
-  return async function handleInteraction(req: IncomingMessage, res: ServerResponse, url: URL): Promise<boolean> {
-    const match = url.pathname.match(/^\/interaction\/([^/]+)(?:\/(.+))?$/);
-    if (!match) return false;
-    const [, uid, action = ""] = match;
-    if (!UID.test(uid)) {
-      send(res, 404, { error: "Not found" });
-      return true;
-    }
-    const method = req.method ?? "GET";
-
-    // The page: the Vue app for a login, a redirect for consent.
-    if (action === "" && method === "GET") {
-      const details = await detailsFor(req, res, uid, true);
-      if (!details) return true;
-      if (details.prompt.name === "login") {
-        await sendSpa(res);
-      } else if (details.prompt.name === "consent") {
-        res.writeHead(303, { location: await consent(req, res, details), "cache-control": "no-store" });
-        res.end();
-      } else {
-        sendHtml(res, 400, errorPage({ error: "invalid_request", error_description: "Unsupported interaction" }), { "content-security-policy": STATIC_PAGE_CSP });
-      }
-      return true;
-    }
-
-    if (action === "details" && method === "GET") {
-      const details = await detailsFor(req, res, uid, false);
-      if (!details) return true;
-      const client = await (provider as any).Client.find(String(details.params.client_id));
-      send(res, 200, {
-        uid,
-        prompt: details.prompt.name,
-        client: { id: client?.clientId ?? null, name: client?.clientName ?? client?.clientId ?? null },
-        login_hint: typeof details.params.login_hint === "string" ? details.params.login_hint : null,
+  async function sendSpa(c: ICtx) {
+    const index = Bun.file(join(config.frontendDistDir, "index.html"));
+    if (!(await index.exists())) {
+      return c.html(errorPage({ error: "temporarily_unavailable", error_description: "The sign-in page is not built" }), 503, {
+        "content-security-policy": STATIC_PAGE_CSP,
       });
-      return true;
     }
+    return c.html(await index.text(), 200, { "content-security-policy": "frame-ancestors 'none'" });
+  }
 
-    if (method !== "POST" || !["login", "passkey/options", "passkey/verify", "abort"].includes(action)) {
-      send(res, 404, { error: "Not found" });
-      return true;
+  // The page: the Vue app for a login, a redirect for consent.
+  app.get("/interaction/:uid", loadDetails(true), async (c) => {
+    const details = c.var.details;
+    if (details.prompt.name === "login") return sendSpa(c);
+    if (details.prompt.name === "consent") {
+      return c.newResponse(null, 303, { location: await consent(c, details), "cache-control": "no-store" });
     }
+    return c.html(errorPage({ error: "invalid_request", error_description: "Unsupported interaction" }), 400, { "content-security-policy": STATIC_PAGE_CSP });
+  });
 
-    const rejected = sameOriginJson(req);
-    if (rejected) {
-      send(res, 403, { error: rejected });
-      return true;
+  app.get("/interaction/:uid/details", loadDetails(false), async (c) => {
+    const details = c.var.details;
+    const client = await (provider as any).Client.find(String(details.params.client_id));
+    return c.json({
+      uid: c.req.param("uid"),
+      prompt: details.prompt.name,
+      client: { id: client?.clientId ?? null, name: client?.clientName ?? client?.clientId ?? null },
+      login_hint: typeof details.params.login_hint === "string" ? details.params.login_hint : null,
+    });
+  });
+
+  // Every POST action shares the CSRF check, the JSON body and the interaction details.
+  const postSetup = async (c: ICtx, next: Next) => {
+    const rejected = sameOriginJson(c);
+    if (rejected) return c.json({ error: rejected }, 403);
+    const body = await readJson(c);
+    if (!body) return c.json({ error: "A JSON object body is required" }, 400);
+    c.set("body", body);
+    return loadDetails(false)(c, next);
+  };
+  app.use("/interaction/:uid/login", postSetup);
+  app.use("/interaction/:uid/passkey/options", postSetup);
+  app.use("/interaction/:uid/passkey/verify", postSetup);
+  app.use("/interaction/:uid/abort", postSetup);
+
+  app.post("/interaction/:uid/abort", async (c) => {
+    return c.json({ redirect: await refuse(c, "The user cancelled the sign-in") });
+  });
+
+  const signInOnly = async (c: ICtx, next: Next) => {
+    if (c.var.details.prompt.name !== "login") return c.json({ error: "This interaction is not asking for a sign-in" }, 409);
+    await next();
+  };
+  app.use("/interaction/:uid/passkey/options", signInOnly);
+  app.use("/interaction/:uid/passkey/verify", signInOnly);
+  app.use("/interaction/:uid/login", signInOnly);
+
+  const finish = async (c: ICtx, userId: string, amr: string[]) => {
+    const redirect = await provider.interactionResult(
+      c.env.nodeReq,
+      c.env.nodeRes,
+      { login: { accountId: userId, amr, acr: ACR_BASIC, remember: true } },
+      { mergeWithLastSubmission: false }
+    );
+    return c.json({ redirect });
+  };
+
+  app.post("/interaction/:uid/passkey/options", async (c) => {
+    const username = typeof c.var.body.username === "string" && c.var.body.username.trim() ? normalizeUsername(c.var.body.username) : undefined;
+    return c.json(await generateLoginOptions(username));
+  });
+
+  app.post("/interaction/:uid/login", async (c) => {
+    const username = normalizeUsername(c.var.body.username);
+    const password = typeof c.var.body.password === "string" ? c.var.body.password : "";
+    if (!username || !password || username.length > 200 || password.length > 1024) {
+      return c.json({ error: "username and password are required" }, 400);
     }
-    const body = await readJson(req);
-    if (!body) {
-      send(res, 400, { error: "A JSON object body is required" });
-      return true;
+    const result = await checkPasswordLogin(username, password, throttleIp(c));
+    if (!result.ok) {
+      await auditOidc({ event: "oidc.login", success: false, userId: result.userId, username, detail: result.status === 429 ? "throttled" : result.error });
+      return c.json({ error: result.error }, result.status, result.retryAfter ? { "retry-after": String(result.retryAfter) } : {});
     }
-    const details = await detailsFor(req, res, uid, false);
-    if (!details) return true;
+    await auditOidc({ event: "oidc.login", success: true, userId: result.user.id, detail: "pwd" });
+    return finish(c, result.user.id, ["pwd"]);
+  });
 
-    if (action === "abort") {
-      send(res, 200, { redirect: await refuse(req, res, "The user cancelled the sign-in") });
-      return true;
-    }
-
-    // Everything below signs the user in, which only makes sense for a login prompt.
-    if (details.prompt.name !== "login") {
-      send(res, 409, { error: "This interaction is not asking for a sign-in" });
-      return true;
-    }
-
-    if (action === "passkey/options") {
-      const username = typeof body.username === "string" && body.username.trim() ? normalizeUsername(body.username) : undefined;
-      send(res, 200, await generateLoginOptions(username));
-      return true;
-    }
-
-    const finish = async (userId: string, amr: string[]) => {
-      const redirect = await provider.interactionResult(
-        req,
-        res,
-        { login: { accountId: userId, amr, acr: ACR_BASIC, remember: true } },
-        { mergeWithLastSubmission: false }
-      );
-      send(res, 200, { redirect });
-    };
-
-    if (action === "login") {
-      const username = normalizeUsername(body.username);
-      const password = typeof body.password === "string" ? body.password : "";
-      if (!username || !password || username.length > 200 || password.length > 1024) {
-        send(res, 400, { error: "username and password are required" });
-        return true;
-      }
-      const result = await checkPasswordLogin(username, password, throttleIp(req));
-      if (!result.ok) {
-        await auditOidc({ event: "oidc.login", success: false, userId: result.userId, username, detail: result.status === 429 ? "throttled" : result.error });
-        send(res, result.status, { error: result.error }, result.retryAfter ? { "retry-after": String(result.retryAfter) } : {});
-        return true;
-      }
-      await auditOidc({ event: "oidc.login", success: true, userId: result.user.id, detail: "pwd" });
-      await finish(result.user.id, ["pwd"]);
-      return true;
-    }
-
-    // passkey/verify: no username to count against, so failures are throttled per client address only
-    const throttle = throttleKeys(throttleIp(req));
+  // passkey/verify: no username to count against, so failures are throttled per client address only
+  app.post("/interaction/:uid/passkey/verify", async (c) => {
+    const throttle = throttleKeys(throttleIp(c));
     const retryAfter = retryAfterSeconds(throttle);
     if (retryAfter !== null) {
       await auditOidc({ event: "oidc.login", success: false, detail: "passkey: throttled" });
-      send(res, 429, { error: "Too many failed attempts, try again later" }, { "retry-after": String(retryAfter) });
-      return true;
+      return c.json({ error: "Too many failed attempts, try again later" }, 429, { "retry-after": String(retryAfter) });
     }
     try {
-      const { user } = await verifyAssertion(body as any);
+      const { user } = await verifyAssertion(c.var.body as any);
       await auditOidc({ event: "oidc.login", success: true, userId: user.id, detail: "webauthn" });
-      await finish(user.id, ["webauthn"]);
+      return await finish(c, user.id, ["webauthn"]);
     } catch (error: any) {
       const status = error?.statusCode || 401;
       if (status === 401) recordFailure(throttle);
       await auditOidc({ event: "oidc.login", success: false, detail: `passkey: ${error?.message ?? "verification failed"}` });
-      send(res, status, { error: error?.message || "Passkey verification failed" });
+      return c.json({ error: error?.message || "Passkey verification failed" }, status);
     }
-    return true;
-  };
+  });
+
+  return app;
 }

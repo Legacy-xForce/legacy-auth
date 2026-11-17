@@ -2,13 +2,15 @@ import { hkdfSync } from "crypto";
 import Provider, { errors, type Configuration } from "oidc-provider";
 import { config } from "../config.ts";
 import { findUserById } from "../db.ts";
+import { APP_AUDIENCES, type AppAudience } from "../types.ts";
 import { UUID_PATTERN } from "../avatars.ts";
 import { getKid, getPrivateKey } from "../keys.ts";
 import { PostgresAdapter } from "./adapter.ts";
-import { EXTRA_CLIENT_PROPERTIES, redirectOriginAllowed, redirectUriAllowed, secretMatchesHash } from "./clients.ts";
+import { EXTRA_CLIENT_PROPERTIES, previousSecretValid, redirectOriginAllowed, redirectUriAllowed, secretMatchesHash } from "./clients.ts";
 import { assertPublicTarget } from "./net-safety.ts";
+import { issuerOrigin } from "./origin.ts";
 import { errorPage, LOGOUT_CSP, logoutPage, signedOutPage, STATIC_PAGE_CSP } from "./pages.ts";
-import { entitledResourceScopes, RESOURCE_SERVERS, resourcesForScopes, SUPPORTED_SCOPES } from "./scopes.ts";
+import { entitledResourceScopes, RESOURCE_SERVERS, resourceForAudience, resourcesForScopes, SUPPORTED_SCOPES } from "./scopes.ts";
 
 /** `acr` of a session signed in with a password or a passkey. Higher levels are reserved for step-up. */
 export const ACR_BASIC = "urn:legacy:loa:1";
@@ -42,7 +44,6 @@ const asList = (value: unknown): string[] => (Array.isArray(value) ? value.map(S
 
 export function createProvider(): Provider {
   const privateJwk = { ...getPrivateKey().export({ format: "jwk" }), use: "sig", alg: "ES256", kid: getKid() };
-  const issuerOrigin = new URL(config.jwtIssuer).origin;
 
   const configuration: Configuration = {
     adapter: PostgresAdapter as unknown as Configuration["adapter"],
@@ -143,8 +144,8 @@ export function createProvider(): Provider {
       const user = await findUserById(accountId);
       if (!user || !user.active) throw new errors.InvalidGrant("the account is not available");
       // Re-checked on every issuance, refreshes included: losing an app's scope ends sessions for that app.
-      const aud = (token as { aud?: string }).aud;
-      const resource = Object.values(RESOURCE_SERVERS).find((entry) => entry.audience === aud);
+      const aud = (token as { aud?: string }).aud as AppAudience | undefined;
+      const resource = aud && APP_AUDIENCES.includes(aud) ? resourceForAudience(aud) : undefined;
       if (resource && !user.scopes[resource.audience]) throw new errors.InvalidGrant(`the account has no access to ${resource.audience}`);
       return { type: "access", sid: (token as { sid?: string }).sid, username: user.username, display_name: user.display_name || user.username, role: user.role, scopes: user.scopes };
     },
@@ -202,7 +203,7 @@ export function createProvider(): Provider {
     renderError: async (ctx, out) => {
       ctx.set("content-security-policy", STATIC_PAGE_CSP);
       ctx.type = "html";
-      ctx.body = errorPage(out as Record<string, unknown>);
+      ctx.body = errorPage(out as unknown as Record<string, unknown>);
     },
   };
 
@@ -303,9 +304,9 @@ function patchClientSecretComparison(provider: Provider) {
     if (typeof presented !== "string" || presented.length === 0) return false;
     if (secretMatchesHash(presented, this.clientSecret)) return true;
     // Extra metadata keeps its snake_case names; only the standard properties are camel-cased.
-    const previousHash: string | undefined = this.legacy_previous_secret_hash;
-    const previousExpiry = Number(this.legacy_previous_secret_expires_at);
-    return Boolean(previousHash) && previousExpiry > Date.now() / 1000 && secretMatchesHash(presented, previousHash);
+    // Its expiry is in Unix seconds, which previousSecretValid also understands.
+    return previousSecretValid(this.legacy_previous_secret_hash, this.legacy_previous_secret_expires_at) &&
+      secretMatchesHash(presented, this.legacy_previous_secret_hash);
   };
 }
 

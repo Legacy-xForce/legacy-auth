@@ -7,7 +7,7 @@ import { assetLinks } from "../asset-links.ts";
 import { JwksResponse } from "../schemas.ts";
 import { applyDocOverlay } from "../docs-overlay.ts";
 import { serveStaticFile } from "../static.ts";
-import type { AppEnv } from "../lib/context.ts";
+import type { AppEnv, Ctx } from "../lib/context.ts";
 
 export function registerMetaRoutes(app: OpenAPIHono<AppEnv>) {
   app.openapi(
@@ -50,32 +50,30 @@ export function registerMetaRoutes(app: OpenAPIHono<AppEnv>) {
     cdn: "https://cdn.jsdelivr.net/npm/@scalar/api-reference@1.80.0",
   }));
 
-  // Frontend catch-all must be registered last. Never let an unmatched API,
-  // well-known, or docs path fall through to the SPA.
+  // Hono routes the "no such API path" cases explicitly, so the SPA catch-all
+  // below never has to inspect the pathname itself. These are registered after
+  // every real route, and before the catch-all.
+  const apiNotFound = (c: Ctx) => c.json({ error: "Not found" } as any, 404);
+  app.all("/auth/*", apiNotFound);
+  app.all("/admin/*", apiNotFound);
+  app.all("/.well-known/*", apiNotFound);
+  app.all("/docs/*", apiNotFound);
+
   app.get("*", async (c) => {
-    const pathname = new URL(c.req.url).pathname;
-    if (
-      pathname.startsWith("/auth/") ||
-      pathname.startsWith("/admin/") ||
-      pathname.startsWith("/.well-known/") ||
-      pathname.startsWith("/docs/")
-    ) {
-      return c.json({ error: "Not found" } as any, 404);
-    }
-    const staticResponse = await tryServeFrontend(pathname, c.req.raw);
+    const staticResponse = await tryServeFrontend(c, c.req.path);
     return staticResponse ?? c.json({ error: "Not found" } as any, 404);
   });
 }
 
-async function tryServeFrontend(pathname: string, request: Request): Promise<Response | null> {
+async function tryServeFrontend(c: Ctx, pathname: string): Promise<Response | null> {
   let decoded: string;
   try { decoded = decodeURIComponent(pathname); }
   catch { return null; }
   const relative = normalize(decoded).replace(/^(\.\.[/\\])+/, "").replace(/^\/+/, "");
   const candidate = join(config.frontendDistDir, relative || "index.html");
   const file = Bun.file(candidate);
-  if (await file.exists()) return await serveStaticFile(file, request);
+  if (await file.exists()) return await serveStaticFile(c, file);
   const indexFile = Bun.file(join(config.frontendDistDir, "index.html"));
-  if (await indexFile.exists()) return await serveStaticFile(indexFile, request);
+  if (await indexFile.exists()) return await serveStaticFile(c, indexFile);
   return null;
 }

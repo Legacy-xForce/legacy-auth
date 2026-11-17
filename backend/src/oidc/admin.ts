@@ -1,7 +1,9 @@
+import { Hono } from "hono";
 import { withCorsHeaders } from "../cors.ts";
-import type { AuthEvent } from "../db.ts";
 import { jsonHeaders } from "../http.ts";
-import type { UserRecord } from "../types.ts";
+import { audit } from "../lib/audit.ts";
+import { readJsonObjectFromRequest } from "../lib/json.ts";
+import type { AppEnv, Ctx } from "../lib/context.ts";
 import {
   ClientExistsError,
   ClientValidationError,
@@ -16,30 +18,14 @@ import {
   type ClientFields,
 } from "./clients.ts";
 
-type AdminContext = {
-  request: Request;
-  url: URL;
-  actor: UserRecord;
-  audit: (entry: Omit<AuthEvent, "ip" | "userAgent">) => void;
-};
-
-const CLIENT_ID_IN_PATH = /^\/admin\/oidc\/clients\/([a-z0-9][a-z0-9._-]{1,62})(?:\/(rotate-secret|disable|enable))?$/;
+const CLIENT_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{1,62}$/;
 const MAX_ROTATION_GRACE_SECONDS = 30 * 86400;
 
 // Responses can carry a client secret, so none of them may be cached.
-const respond = (status: number, body: unknown) =>
-  new Response(JSON.stringify(body), { status, headers: withCorsHeaders({ ...jsonHeaders, "cache-control": "no-store", pragma: "no-cache" }) });
+const noStore = () => Object.fromEntries(withCorsHeaders({ ...jsonHeaders, "cache-control": "no-store", pragma: "no-cache" }).entries());
 
-const notFound = () => respond(404, { error: "Client not found" });
-
-async function readBody(request: Request): Promise<Record<string, unknown> | null> {
-  try {
-    const body = await request.json();
-    return body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>) : null;
-  } catch {
-    return null;
-  }
-}
+const respond = (c: Ctx, status: 200 | 201 | 400 | 404 | 409, body: unknown) => c.json(body as any, status, noStore());
+const notFound = (c: Ctx) => respond(c, 404, { error: "Client not found" });
 
 const currentFields = (row: NonNullable<Awaited<ReturnType<typeof getClient>>>): ClientFields => ({
   name: row.name,
@@ -55,91 +41,105 @@ const currentFields = (row: NonNullable<Awaited<ReturnType<typeof getClient>>>):
 const EDITABLE = ["name", "redirect_uris", "post_logout_redirect_uris", "backchannel_logout_uri", "allowed_scopes", "primary_resource", "default_resources"];
 
 /**
- * `/admin/oidc/clients…`: the registry of relying parties. The caller has
- * already checked that the user is an admin. Returns null for a path that is
- * not one of these, so the router can carry on.
+ * `/admin/oidc/clients…`: the registry of relying parties. Hono owns path and
+ * method dispatch; the caller has already checked the admin role. Mounted under
+ * `/admin/oidc` by routes/oidc-admin.ts.
  */
-export async function handleOidcAdmin({ request, url, actor, audit }: AdminContext): Promise<Response | null> {
-  const record = (event: string, clientId: string, detail?: string) =>
-    audit({ event, success: true, userId: actor.id, username: actor.username, actorId: actor.id, detail: detail ? `${clientId}: ${detail}` : clientId });
+export function createOidcAdminRouter(): Hono<AppEnv> {
+  const router = new Hono<AppEnv>();
 
-  try {
-    if (url.pathname === "/admin/oidc/clients") {
-      if (request.method === "GET") {
-        return respond(200, { items: (await listClients()).map(toPublicClient) });
-      }
-      if (request.method === "POST") {
-        const body = await readBody(request);
-        if (!body) return respond(400, { error: "A JSON object body is required" });
-        const clientId = typeof body.client_id === "string" ? body.client_id : "";
-        const fields = validateClientFields(body);
-        const { client, secret } = await createClient(clientId, fields, { disabled: body.disabled === true });
-        record("admin_oidc_client_create", clientId, fields.is_public ? "public" : "confidential");
-        return respond(201, { client: toPublicClient(client), ...(secret ? { client_secret: secret } : {}) });
-      }
-      return null;
-    }
-
-    const match = url.pathname.match(CLIENT_ID_IN_PATH);
-    if (!match) return null;
-    const [, clientId, action] = match;
-
-    if (!action && request.method === "GET") {
-      const row = await getClient(clientId);
-      return row ? respond(200, toPublicClient(row)) : notFound();
-    }
-
-    if (!action && request.method === "PATCH") {
-      const row = await getClient(clientId);
-      if (!row) return notFound();
-      const body = await readBody(request);
-      if (!body) return respond(400, { error: "A JSON object body is required" });
-      if ("is_public" in body && body.is_public !== row.is_public) {
-        return respond(400, { error: "is_public cannot be changed; register a new client instead" });
-      }
-      const unknown = Object.keys(body).filter((key) => !EDITABLE.includes(key) && key !== "is_public");
-      if (unknown.length > 0) return respond(400, { error: `cannot update: ${unknown.join(", ")}` });
-      const updated = await updateClient(clientId, validateClientFields(body, currentFields(row)));
-      if (!updated) return notFound();
-      record("admin_oidc_client_update", clientId, Object.keys(body).join(","));
-      return respond(200, toPublicClient(updated));
-    }
-
-    if (action === "rotate-secret" && request.method === "POST") {
-      const body = (await readBody(request)) ?? {};
-      let grace: number | undefined;
-      if ("grace_seconds" in body) {
-        const value = body.grace_seconds;
-        if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > MAX_ROTATION_GRACE_SECONDS) {
-          return respond(400, { error: `grace_seconds must be between 0 and ${MAX_ROTATION_GRACE_SECONDS}` });
-        }
-        grace = value;
-      }
-      const row = await getClient(clientId);
-      if (!row) return notFound();
-      if (row.is_public) return respond(400, { error: "A public client has no secret" });
-      const rotated = await rotateClientSecret(clientId, grace);
-      if (!rotated) return notFound();
-      record("admin_oidc_client_rotate_secret", clientId, `previous secret valid for ${grace ?? "the default grace period"}s`);
-      return respond(200, { client: toPublicClient(rotated.client), client_secret: rotated.secret });
-    }
-
-    if ((action === "disable" || action === "enable") && request.method === "POST") {
-      const row = await getClient(clientId);
-      if (!row) return notFound();
-      if (action === "enable" && !row.is_public && !row.client_secret_hash) {
-        return respond(409, { error: "This client has no secret yet; rotate one before enabling it" });
-      }
-      const updated = await setClientDisabled(clientId, action === "disable");
-      if (!updated) return notFound();
-      record(action === "disable" ? "admin_oidc_client_disable" : "admin_oidc_client_enable", clientId);
-      return respond(200, toPublicClient(updated));
-    }
-
-    return null;
-  } catch (error) {
-    if (error instanceof ClientValidationError) return respond(400, { error: error.message });
-    if (error instanceof ClientExistsError) return respond(409, { error: error.message });
+  router.onError((error, c) => {
+    if (error instanceof ClientValidationError) return respond(c, 400, { error: error.message });
+    if (error instanceof ClientExistsError) return respond(c, 409, { error: error.message });
     throw error;
-  }
+  });
+
+  router.notFound((c) => respond(c, 404, { error: "Not found" }));
+
+  // The old router's path regex refused malformed client ids with a 404. Hono's
+  // `:clientId` matches any segment, so keep that check as a param middleware.
+  const validClientId = async (c: Ctx, next: () => Promise<void>) => {
+    if (!CLIENT_ID_PATTERN.test(c.req.param("clientId") ?? "")) return notFound(c);
+    await next();
+  };
+  router.use("/clients/:clientId", validClientId);
+  router.use("/clients/:clientId/*", validClientId);
+
+  const record = (c: Ctx, event: string, clientId: string, detail?: string) => {
+    const actor = c.get("user");
+    audit(c, { event, success: true, userId: actor.id, username: actor.username, actorId: actor.id, detail: detail ? `${clientId}: ${detail}` : clientId });
+  };
+
+  router.get("/clients", async (c) => {
+    return respond(c, 200, { items: (await listClients()).map(toPublicClient) });
+  });
+
+  router.post("/clients", async (c) => {
+    const body = await readJsonObjectFromRequest(c.req.raw);
+    if (!body) return respond(c, 400, { error: "A JSON object body is required" });
+    const clientId = typeof body.client_id === "string" ? body.client_id : "";
+    const fields = validateClientFields(body);
+    const { client, secret } = await createClient(clientId, fields, { disabled: body.disabled === true });
+    record(c, "admin_oidc_client_create", clientId, fields.is_public ? "public" : "confidential");
+    return respond(c, 201, { client: toPublicClient(client), ...(secret ? { client_secret: secret } : {}) });
+  });
+
+  router.get("/clients/:clientId", async (c) => {
+    const row = await getClient(c.req.param("clientId"));
+    return row ? respond(c, 200, toPublicClient(row)) : notFound(c);
+  });
+
+  router.patch("/clients/:clientId", async (c) => {
+    const clientId = c.req.param("clientId");
+    const row = await getClient(clientId);
+    if (!row) return notFound(c);
+    const body = await readJsonObjectFromRequest(c.req.raw);
+    if (!body) return respond(c, 400, { error: "A JSON object body is required" });
+    if ("is_public" in body && body.is_public !== row.is_public) {
+      return respond(c, 400, { error: "is_public cannot be changed; register a new client instead" });
+    }
+    const unknown = Object.keys(body).filter((key) => !EDITABLE.includes(key) && key !== "is_public");
+    if (unknown.length > 0) return respond(c, 400, { error: `cannot update: ${unknown.join(", ")}` });
+    const updated = await updateClient(clientId, validateClientFields(body, currentFields(row)));
+    if (!updated) return notFound(c);
+    record(c, "admin_oidc_client_update", clientId, Object.keys(body).join(","));
+    return respond(c, 200, toPublicClient(updated));
+  });
+
+  router.post("/clients/:clientId/rotate-secret", async (c) => {
+    const clientId = c.req.param("clientId");
+    const body = (await readJsonObjectFromRequest(c.req.raw)) ?? {};
+    let grace: number | undefined;
+    if ("grace_seconds" in body) {
+      const value = body.grace_seconds;
+      if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > MAX_ROTATION_GRACE_SECONDS) {
+        return respond(c, 400, { error: `grace_seconds must be between 0 and ${MAX_ROTATION_GRACE_SECONDS}` });
+      }
+      grace = value;
+    }
+    const row = await getClient(clientId);
+    if (!row) return notFound(c);
+    if (row.is_public) return respond(c, 400, { error: "A public client has no secret" });
+    const rotated = await rotateClientSecret(clientId, grace);
+    if (!rotated) return notFound(c);
+    record(c, "admin_oidc_client_rotate_secret", clientId, `previous secret valid for ${grace ?? "the default grace period"}s`);
+    return respond(c, 200, { client: toPublicClient(rotated.client), client_secret: rotated.secret });
+  });
+
+  const setDisabled = (enable: boolean) => async (c: Ctx) => {
+    const clientId = c.req.param("clientId")!;
+    const row = await getClient(clientId);
+    if (!row) return notFound(c);
+    if (enable && !row.is_public && !row.client_secret_hash) {
+      return respond(c, 409, { error: "This client has no secret yet; rotate one before enabling it" });
+    }
+    const updated = await setClientDisabled(clientId, !enable);
+    if (!updated) return notFound(c);
+    record(c, enable ? "admin_oidc_client_enable" : "admin_oidc_client_disable", clientId);
+    return respond(c, 200, toPublicClient(updated));
+  };
+  router.post("/clients/:clientId/disable", setDisabled(false));
+  router.post("/clients/:clientId/enable", setDisabled(true));
+
+  return router;
 }

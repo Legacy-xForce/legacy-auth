@@ -4,16 +4,19 @@ import { RouterLink, useRouter } from "vue-router";
 import { api } from "../../api/client";
 import { useAuthStore, type User } from "../../stores/auth";
 import { useToastStore } from "../../stores/toast";
-import { generatePassword } from "../../utils/password";
+import { errorMessage } from "../../utils/errors";
+import type { Role } from "../../constants";
+import AppAccessSection from "../../components/AppAccessSection.vue";
+import AvatarUpload from "../../components/AvatarUpload.vue";
 import ConfirmDialog from "../../components/ConfirmDialog.vue";
+import EmptyState from "../../components/EmptyState.vue";
 import FormAlert from "../../components/FormAlert.vue";
 import Icon from "../../components/Icon.vue";
-import OptionRow from "../../components/OptionRow.vue";
-import PasswordInput from "../../components/PasswordInput.vue";
-import SegmentedControl from "../../components/SegmentedControl.vue";
+import PasswordField from "../../components/PasswordField.vue";
+import RoleChip from "../../components/RoleChip.vue";
+import SkeletonRow from "../../components/SkeletonRow.vue";
 import StatusPill from "../../components/StatusPill.vue";
-import ToggleSwitch from "../../components/ToggleSwitch.vue";
-import UserAvatar from "../../components/UserAvatar.vue";
+import UserIdentityFields from "../../components/UserIdentityFields.vue";
 
 const props = defineProps<{ id: string }>();
 const router = useRouter();
@@ -24,7 +27,7 @@ const user = ref<User | null>(null);
 const loadError = ref("");
 const username = ref("");
 const displayName = ref("");
-const role = ref<"admin" | "user">("user");
+const role = ref<Role>("user");
 const active = ref(true);
 const calendarScope = ref(false);
 const trackerScope = ref(false);
@@ -34,13 +37,6 @@ const saving = ref(false);
 const deleting = ref(false);
 const confirmingDelete = ref(false);
 const error = ref("");
-const avatarInput = ref<HTMLInputElement | null>(null);
-const avatarVersion = ref(0);
-
-const roleOptions: { value: "admin" | "user"; label: string }[] = [
-  { value: "user", label: "Member" },
-  { value: "admin", label: "Admin" },
-];
 
 const isSelf = computed(() => user.value?.id === authStore.user?.id);
 
@@ -73,41 +69,11 @@ async function load() {
     const u = await api.get<User>(`/admin/users/${props.id}`);
     applyUser(u);
   } catch (err) {
-    loadError.value = err instanceof Error ? err.message : "Couldn't load this user";
+    loadError.value = errorMessage(err, "Couldn't load this user");
   }
 }
 
 onMounted(load);
-
-function fillPassword() {
-  password.value = generatePassword();
-}
-
-async function copyPassword() {
-  if (!password.value) return;
-  await navigator.clipboard.writeText(password.value);
-  toast.success("Password copied");
-}
-
-function triggerAvatarUpload() {
-  avatarInput.value?.click();
-}
-
-async function onAvatarSelected(event: Event) {
-  const file = (event.target as HTMLInputElement).files?.[0];
-  if (!file) return;
-  const formData = new FormData();
-  formData.append("file", file);
-  try {
-    await api.postForm(`/admin/users/${props.id}/avatar`, formData);
-    avatarVersion.value++;
-    toast.success("Picture updated");
-  } catch (err) {
-    toast.error(err instanceof Error ? err.message : "Failed to upload avatar");
-  } finally {
-    (event.target as HTMLInputElement).value = "";
-  }
-}
 
 async function save() {
   error.value = "";
@@ -120,15 +86,13 @@ async function save() {
       active: active.value,
       scopes: { calendar: calendarScope.value, tracker: trackerScope.value },
     };
-    if (password.value) {
-      payload.password = password.value;
-    }
+    if (password.value) payload.password = password.value;
     const updated = await api.patch<User>(`/admin/users/${props.id}`, payload);
     applyUser(updated);
     password.value = "";
     toast.success("Changes saved");
   } catch (err) {
-    error.value = err instanceof Error ? err.message : "Failed to save changes";
+    error.value = errorMessage(err, "Failed to save changes");
   } finally {
     saving.value = false;
   }
@@ -148,7 +112,7 @@ async function confirmDelete() {
     toast.success(`${user.value?.display_name || user.value?.username || "User"} deleted`);
     router.push({ name: "users" });
   } catch (err) {
-    error.value = err instanceof Error ? err.message : "Failed to delete user";
+    error.value = errorMessage(err, "Failed to delete user");
     confirmingDelete.value = false;
   } finally {
     deleting.value = false;
@@ -163,47 +127,24 @@ async function confirmDelete() {
       Users
     </RouterLink>
 
-    <div v-if="loadError" class="card mt-4 flex flex-col items-center px-6 py-14 text-center">
-      <div class="flex size-12 items-center justify-center rounded-full bg-fg/6 text-muted">
-        <Icon name="user" :size="20" />
-      </div>
-      <h1 class="m-0 mt-4 text-title">This user couldn't be loaded</h1>
-      <p class="m-0 mt-1 text-meta text-muted">{{ loadError }}</p>
+    <div v-if="loadError" class="card mt-4">
+      <EmptyState icon="user" heading="h1" title="This user couldn't be loaded" :description="loadError" />
     </div>
 
-    <div v-else-if="!user" class="mt-4 flex items-center gap-4" aria-busy="true">
-      <span class="size-18 animate-pulse rounded-full bg-fg/8" />
-      <span class="flex flex-col gap-2.5">
-        <span class="h-5 w-40 animate-pulse rounded-full bg-fg/8" />
-        <span class="h-3 w-56 animate-pulse rounded-full bg-fg/5" />
-      </span>
-    </div>
+    <SkeletonRow v-else-if="!user" :size="72" class="mt-4" />
 
     <template v-else>
       <header class="mt-3 mb-6 flex items-center gap-4">
-        <button
-          type="button"
-          class="group relative shrink-0 cursor-pointer rounded-full"
-          aria-label="Change profile picture"
-          @click="triggerAvatarUpload"
-        >
-          <UserAvatar :key="avatarVersion" :user-id="user.id" :name="user.display_name || user.username" :size="72" />
-          <span
-            class="absolute -right-0.5 -bottom-0.5 flex size-7 items-center justify-center rounded-full border-[3px] border-canvas bg-primary text-primary-contrast transition-transform group-hover:scale-110"
-          >
-            <Icon name="camera" :size="13" />
-          </span>
-        </button>
-        <input ref="avatarInput" type="file" accept="image/*" class="hidden" @change="onAvatarSelected" />
+        <AvatarUpload
+          :user-id="user.id"
+          :name="user.display_name || user.username"
+          :endpoint="`/admin/users/${user.id}/avatar`"
+        />
         <div class="min-w-0">
           <h1 class="m-0 truncate text-display">{{ user.display_name || user.username }}</h1>
           <p class="m-0 mt-0.5 truncate text-meta text-subtle">@{{ user.username }}</p>
           <div class="mt-1.5 flex flex-wrap items-center gap-2">
-            <span v-if="user.role === 'admin'" class="chip bg-accent/12 text-accent">
-              <Icon name="shieldCheck" :size="13" />
-              Admin
-            </span>
-            <span v-else class="chip bg-fg/6 text-muted">Member</span>
+            <RoleChip :role="user.role" />
             <StatusPill :active="user.active" />
             <span v-if="isSelf" class="chip bg-fg/6 text-muted">You</span>
           </div>
@@ -211,78 +152,30 @@ async function confirmDelete() {
       </header>
 
       <form class="flex flex-col gap-5" novalidate @submit.prevent="save">
-        <section class="card flex flex-col gap-5 p-5 sm:p-6" aria-labelledby="identity-heading">
-          <h2 id="identity-heading" class="eyebrow m-0">Account</h2>
-
-          <div class="field">
-            <label for="edit-username">Username</label>
-            <input id="edit-username" v-model="username" class="input" autocapitalize="none" spellcheck="false" />
-            <p class="field-hint">Stored lowercase; it is the name they sign in with.</p>
-          </div>
-
-          <div class="field">
-            <label for="edit-display-name">Display name</label>
-            <input id="edit-display-name" v-model="displayName" class="input" spellcheck="false" />
-            <p class="field-hint">Shown in the apps and in this console.</p>
-          </div>
-
-          <div class="field">
-            <span class="field-label">Role</span>
-            <SegmentedControl v-model="role" :options="roleOptions" label="Role" class="w-full sm:w-64" />
-            <p class="field-hint">
-              {{ role === "admin" ? "Can open this console and manage every account." : "Can sign in to the apps they have access to." }}
-            </p>
-          </div>
-
+        <UserIdentityFields
+          id-prefix="edit"
+          heading-id="identity-heading"
+          v-model:username="username"
+          v-model:display-name="displayName"
+          v-model:role="role"
+        >
           <div class="field">
             <label for="edit-password">New password</label>
-            <div class="flex gap-2">
-              <PasswordInput
-                id="edit-password"
-                v-model="password"
-                class="input font-mono placeholder:font-sans"
-                placeholder="Unchanged"
-                autocomplete="new-password"
-              />
-              <button type="button" class="btn btn-secondary h-11 px-3.5" title="Generate a password" @click="fillPassword">
-                <Icon name="dice" :size="16" />
-                <span class="hidden sm:inline">Generate</span>
-              </button>
-              <button
-                type="button"
-                class="btn btn-secondary h-11 w-11 px-0"
-                title="Copy password"
-                aria-label="Copy password"
-                :disabled="!password"
-                @click="copyPassword"
-              >
-                <Icon name="copy" :size="16" />
-              </button>
-            </div>
+            <PasswordField id="edit-password" v-model="password" placeholder="Unchanged" autocomplete="new-password" />
           </div>
 
           <div class="flex items-center justify-between gap-3 border-t border-line pt-4">
             <span class="field-label shrink-0">User ID</span>
             <span class="truncate font-mono text-xs text-subtle select-all">{{ user.id }}</span>
           </div>
-        </section>
+        </UserIdentityFields>
 
-        <section class="card divide-y divide-line overflow-hidden" aria-labelledby="access-heading">
-          <h2 id="access-heading" class="eyebrow m-0 px-5 pt-5 pb-1 sm:px-6">App access</h2>
-          <OptionRow icon="calendar" title="Calendar" description="Legacy Calendar on the web and on phones." class="border-t-0!">
-            <ToggleSwitch v-model="calendarScope" aria-label="Calendar access" />
-          </OptionRow>
-          <OptionRow icon="mapPin" title="Tracker" description="Legacy Tracker on the web and on phones.">
-            <ToggleSwitch v-model="trackerScope" aria-label="Tracker access" />
-          </OptionRow>
-          <OptionRow
-            icon="user"
-            title="Active"
-            :description="active ? 'This account can sign in.' : 'Disabled: this account can\'t sign in anywhere.'"
-          >
-            <ToggleSwitch v-model="active" aria-label="Active" />
-          </OptionRow>
-        </section>
+        <AppAccessSection
+          v-model:calendar="calendarScope"
+          v-model:tracker="trackerScope"
+          v-model:active="active"
+          :active-description="active ? 'This account can sign in.' : 'Disabled: this account can\'t sign in anywhere.'"
+        />
 
         <FormAlert v-if="error">{{ error }}</FormAlert>
 
@@ -327,23 +220,3 @@ async function confirmDelete() {
     </template>
   </div>
 </template>
-
-<style scoped>
-.savebar-enter-active {
-  transition:
-    opacity 200ms var(--ease-out-quart),
-    transform 380ms var(--ease-out-expo);
-}
-
-.savebar-leave-active {
-  transition:
-    opacity 140ms var(--ease-in-quart),
-    transform 140ms var(--ease-in-quart);
-}
-
-.savebar-enter-from,
-.savebar-leave-to {
-  opacity: 0;
-  transform: translateY(1rem);
-}
-</style>

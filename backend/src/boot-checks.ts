@@ -8,6 +8,28 @@ export const FORBIDDEN_JWT_SECRETS = new Set(["replace-with-strong-secret", "sup
 // file, so whoever copies it into production signs tokens with a key everyone has.
 const PUBLISHED_EXAMPLE_KEY = { x: "z20qlPoldfyYZ4B7RS7mB1TW464sXHbKZjOdOHwVBR8", y: "byEn7E8Jwoft0Yo7aZyPNj-fwGoDEy8b5sRdCDJ8Zd0" };
 
+/** Why the configured signing key is unsafe, or null when it is fine. */
+function signingKeyProblem(pem: string | undefined): string | null {
+  if (!pem) {
+    return "JWT_PRIVATE_KEY is not set. Without it a new signing key is generated on every start and every issued token stops verifying.";
+  }
+  try {
+    // .env files often store newlines as literal \n (see keys.ts)
+    const key = createPrivateKey(pem.replace(/\\n/g, "\n"));
+    const curve = (key.asymmetricKeyDetails as { namedCurve?: string } | undefined)?.namedCurve;
+    if (key.asymmetricKeyType !== "ec" || curve !== "prime256v1") {
+      return "JWT_PRIVATE_KEY must be an EC P-256 key (access tokens are signed with ES256).";
+    }
+    const jwk = createPublicKey(key).export({ format: "jwk" });
+    if (jwk.x === PUBLISHED_EXAMPLE_KEY.x && jwk.y === PUBLISHED_EXAMPLE_KEY.y) {
+      return "JWT_PRIVATE_KEY is the example key from .env.example, which is public. Generate your own.";
+    }
+    return null;
+  } catch {
+    return "JWT_PRIVATE_KEY is not a valid PEM private key.";
+  }
+}
+
 /**
  * Problems that make a production start unsafe. A missing signing key would
  * silently become an ephemeral one that invalidates every token on restart, and
@@ -23,28 +45,8 @@ export function productionConfigProblems(env: Record<string, string | undefined>
     problems.push("JWT_SECRET is a well-known placeholder. Configure a unique, random secret.");
   }
 
-  const pem = env.JWT_PRIVATE_KEY?.trim();
-  if (!pem) {
-    problems.push(
-      "JWT_PRIVATE_KEY is not set. Without it a new signing key is generated on every start and every issued token stops verifying."
-    );
-  } else {
-    try {
-      // .env files often store newlines as literal \n (see keys.ts)
-      const key = createPrivateKey(pem.replace(/\\n/g, "\n"));
-      const curve = (key.asymmetricKeyDetails as { namedCurve?: string } | undefined)?.namedCurve;
-      if (key.asymmetricKeyType !== "ec" || curve !== "prime256v1") {
-        problems.push("JWT_PRIVATE_KEY must be an EC P-256 key (access tokens are signed with ES256).");
-      } else {
-        const jwk = createPublicKey(key).export({ format: "jwk" });
-        if (jwk.x === PUBLISHED_EXAMPLE_KEY.x && jwk.y === PUBLISHED_EXAMPLE_KEY.y) {
-          problems.push("JWT_PRIVATE_KEY is the example key from .env.example, which is public. Generate your own.");
-        }
-      }
-    } catch {
-      problems.push("JWT_PRIVATE_KEY is not a valid PEM private key.");
-    }
-  }
+  const keyProblem = signingKeyProblem(env.JWT_PRIVATE_KEY?.trim());
+  if (keyProblem) problems.push(keyProblem);
 
   return problems;
 }

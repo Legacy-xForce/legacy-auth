@@ -8,11 +8,15 @@ import {
 import { displayNameFromInput, normalizeUsername } from "../usernames.ts";
 import { invalidateCachedUser } from "../cache.ts";
 import { oidc } from "../oidc/index.ts";
-import { saveAvatar, deleteAvatar, UnsupportedImageError, UUID_PATTERN } from "../avatars.ts";
-import { APP_AUDIENCES, type UserRole, type UserScopes, type UserRecord } from "../types.ts";
+import { deleteAvatar, UUID_PATTERN } from "../avatars.ts";
+import { APP_AUDIENCES, type UserRole, type UserScopes } from "../types.ts";
 import { AuditEventsResponse, ErrorResponse } from "../schemas.ts";
 import { audit } from "../lib/audit.ts";
 import { documentOnly } from "../lib/openapi.ts";
+import { performAvatarUpload } from "../lib/avatar-upload.ts";
+import { userWriteErrorResponse } from "../lib/errors.ts";
+import { readJsonObject } from "../lib/json.ts";
+import { toPublicUser } from "../lib/public-user.ts";
 import { requireAdmin } from "../middleware/auth.ts";
 import type { AppEnv, Ctx, JsonCtx, QueryCtx } from "../lib/context.ts";
 
@@ -137,14 +141,6 @@ export function registerAdminRoutes(app: OpenAPIHono<AppEnv>) {
   }), requireAdmin as any, handleUploadUserAvatar);
 }
 
-function toPublicUser(user: UserRecord) {
-  return {
-    id: user.id, username: user.username, display_name: user.display_name,
-    role: user.role, active: user.active, scopes: user.scopes,
-    created_at: user.created_at, updated_at: user.updated_at,
-  };
-}
-
 function describeUserUpdate(body: { username?: string; display_name?: string; role?: string; active?: boolean; password?: string; scopes?: { calendar?: boolean; tracker?: boolean } }) {
   const parts: string[] = [];
   if (body.username !== undefined) parts.push(`username=${normalizeUsername(body.username)}`);
@@ -200,9 +196,7 @@ async function handleCreateUser(c: JsonCtx<CreateUserBody>) {
     audit(c, { event: "admin_user_create", success: true, userId: user.id, username: user.username, actorId: actor.id, detail: `role=${role} active=${active}` });
     return c.json(toPublicUser(user) as any, 201);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to create user";
-    if (message.toLowerCase().includes("unique")) return c.json({ error: "Username already exists" } as any, 409);
-    return c.json({ error: message } as any, 500);
+    return userWriteErrorResponse(c, error, "Failed to create user");
   }
 }
 
@@ -215,13 +209,9 @@ async function handleGetUser(c: Ctx) {
 async function handleUpdateUser(c: Ctx) {
   const actor = c.get("user");
   const id = c.req.param("id")!;
-  let parsedBody: unknown;
-  try { parsedBody = c.req.raw.body === null ? {} : await c.req.json(); }
-  catch { return c.json({ error: "Malformed JSON in request body" } as any, 400); }
-  if (!parsedBody || typeof parsedBody !== "object" || Array.isArray(parsedBody)) {
-    return c.json({ error: "A JSON object body is required" } as any, 400);
-  }
-  const body = parsedBody as any;
+  const parsed = await readJsonObject(c);
+  if (!parsed.ok) return parsed.response;
+  const body = parsed.value;
   let user = await findUserById(id);
   if (!user) return c.json({ error: "Not found" } as any, 404);
   const previousUsername = user.username;
@@ -252,9 +242,7 @@ async function handleUpdateUser(c: Ctx) {
       await revokeAllRefreshTokensForUser(id);
     }
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to update user";
-    if (message.toLowerCase().includes("unique")) return c.json({ error: "Username already exists" } as any, 409);
-    return c.json({ error: message } as any, 500);
+    return userWriteErrorResponse(c, error, "Failed to update user");
   }
   if (!user.active) await revokeAllRefreshTokensForUser(id);
   if (!user.active || body.password) await oidc.endUserSessions(id);
@@ -284,25 +272,4 @@ async function handleUploadUserAvatar(c: Ctx) {
   const target = await findUserById(id);
   if (!target) return c.json({ error: "Not found" } as any, 404);
   return performAvatarUpload(c, target.id);
-}
-
-async function performAvatarUpload(c: Ctx, userId: string) {
-  let formData: FormData;
-  try { formData = await c.req.formData(); }
-  catch { return c.json({ error: "Request must be multipart/form-data" } as any, 400); }
-
-  const file = formData.get("file");
-  if (!(file instanceof Blob) || file.size === 0) return c.json({ error: "file is required" } as any, 400);
-  if (file.size > config.avatarMaxUploadBytes) {
-    return c.json({ error: `file exceeds maximum size of ${config.avatarMaxUploadBytes} bytes` } as any, 413);
-  }
-
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  try {
-    const saved = await saveAvatar(userId, bytes);
-    return c.json({ success: true, content_type: saved.contentType } as any, 200);
-  } catch (error) {
-    if (error instanceof UnsupportedImageError) return c.json({ error: error.message } as any, 400);
-    return c.json({ error: "Invalid or corrupted image" } as any, 400);
-  }
 }

@@ -1,10 +1,9 @@
 import { createRoute, type OpenAPIHono } from "@hono/zod-openapi";
-import { handleOidcAdmin } from "../oidc/admin.ts";
+import { createOidcAdminRouter } from "../oidc/admin.ts";
 import { OidcClient, CreateOidcClientRequest, UpdateOidcClientRequest, OidcTokenRequest } from "../schemas.ts";
-import { audit } from "../lib/audit.ts";
 import { documentSchema } from "../lib/openapi.ts";
 import { requireAdmin } from "../middleware/auth.ts";
-import type { AppEnv, Ctx } from "../lib/context.ts";
+import type { AppEnv } from "../lib/context.ts";
 
 const clientIdParam: Array<{ name: string; in: "path"; required: boolean; schema: { type: "string" } }> = [
   { name: "clientId", in: "path", required: true, schema: { type: "string" } },
@@ -83,23 +82,11 @@ export function registerOidcAdminRoutes(app: OpenAPIHono<AppEnv>) {
     responses: { "200": { description: "The client" }, "404": { description: "Unknown client" }, "409": { description: "The client has no secret yet" } },
   }));
 
-  // Hono's `/admin/oidc/*` also matches `/admin/oidc` without the slash; the
-  // original router only handled the prefixed form and 404'd the bare path.
-  const oidcAdminGuard = async (c: Ctx, next: () => Promise<void>) => {
-    if (!new URL(c.req.url).pathname.startsWith("/admin/oidc/")) return next();
-    return requireAdmin(c, next);
-  };
-  // One catch-all handler for the client registry; its own field validation and
-  // exact error messages are deliberately left intact.
-  app.all("/admin/oidc/*", oidcAdminGuard as any, handleOidcAdminRoute);
-}
-
-async function handleOidcAdminRoute(c: Ctx) {
-  const response = await handleOidcAdmin({
-    request: c.req.raw,
-    url: new URL(c.req.url),
-    actor: c.get("user"),
-    audit: (entry) => audit(c, entry),
-  });
-  return response ?? c.json({ error: "Not found" } as any, 404);
+  // Scope the guard with Hono path patterns, not a pathname check: the bare
+  // `/admin/oidc` stays a plain 404, and only registry routes need an admin.
+  app.use("/admin/oidc/clients", requireAdmin as any);
+  app.use("/admin/oidc/clients/*", requireAdmin as any);
+  // Hono owns path and method dispatch inside the registry now; the handlers'
+  // field validation and exact error messages are unchanged.
+  app.route("/admin/oidc", createOidcAdminRouter() as any);
 }

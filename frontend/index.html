@@ -9,15 +9,26 @@
     <meta name="darkreader-lock" />
     <script>
       // Apply the saved theme before the first paint to avoid a flash of the default palette.
-      // Keep the ids in sync with src/theme/themes.ts.
+      // This table mirrors THEMES in src/theme/themes.ts; test/frontend-helpers.test.ts keeps them in sync.
       (() => {
         try {
-          const themes = ["oled", "catppuccin-mocha", "catppuccin-macchiato", "catppuccin-frappe", "catppuccin-latte", "adaptive"];
+          const themes = {
+            oled: ["#000000", "dark"],
+            "catppuccin-mocha": ["#11111b", "dark"],
+            "catppuccin-macchiato": ["#181926", "dark"],
+            "catppuccin-frappe": ["#232634", "dark"],
+            "catppuccin-latte": ["#e6e9ef", "light"],
+            adaptive: ["#000000", "dark"],
+          };
           const stored = localStorage.getItem("pref_theme");
-          let theme = themes.includes(stored) ? stored : "oled";
-          if (theme === "adaptive") theme = matchMedia("(prefers-color-scheme: light)").matches ? "catppuccin-latte" : "oled";
+          let theme = stored && Object.prototype.hasOwnProperty.call(themes, stored) ? stored : "oled";
+          const prefersLight = matchMedia("(prefers-color-scheme: light)").matches;
+          if (theme === "adaptive") theme = prefersLight ? "catppuccin-latte" : "oled";
+          const [canvas, mode] = themes[theme];
           document.documentElement.dataset.theme = theme;
-          document.documentElement.style.colorScheme = theme === "catppuccin-latte" ? "light" : "dark";
+          document.documentElement.style.colorScheme = mode;
+          document.querySelector('meta[name="color-scheme"]')?.setAttribute("content", mode);
+          document.querySelector('meta[name="theme-color"]')?.setAttribute("content", canvas);
         } catch {
           // Storage can be unavailable; fall through to the OLED defaults.
         }

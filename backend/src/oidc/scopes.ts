@@ -31,8 +31,17 @@ export const SUPPORTED_SCOPES: readonly string[] = [
   ...Object.values(RESOURCE_SERVERS).flatMap((resource) => resource.scopes),
 ];
 
-export const resourceForScope = (scope: string): ResourceServer | undefined =>
-  Object.values(RESOURCE_SERVERS).find((resource) => resource.scopes.includes(scope));
+/** The canonical resource server for an app whose tokens this service issues. */
+export const resourceForAudience = (app: AppAudience): ResourceServer => RESOURCE_SERVERS[`urn:legacy:${app}`];
+
+/**
+ * Identity scopes followed by the given app/resource scopes, with
+ * `offline_access` last. This is the order the seeded clients have always
+ * registered, now derived from the canonical scope lists instead of retyped.
+ */
+const [openidScope, profileScope, offlineAccessScope] = IDENTITY_SCOPES;
+export const seedScopes = (...resourceScopes: string[]): string[] =>
+  [openidScope, profileScope, ...resourceScopes, offlineAccessScope];
 
 /**
  * The scopes of `resource` this user may be granted. Today the user's boolean
