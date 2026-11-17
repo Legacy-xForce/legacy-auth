@@ -13,6 +13,7 @@ import { createSwaggerAssetResponse, createSwaggerUiResponse, jsonHeaders } from
 import { oidc } from "./oidc/index.ts";
 import { handleOidcAdmin } from "./oidc/admin.ts";
 import { saveAvatar, findAvatar, deleteAvatar, UnsupportedImageError, UUID_PATTERN } from "./avatars.ts";
+import { serveStaticFile } from "./static.ts";
 import {
   generateLoginOptions,
   verifyLogin,
@@ -74,7 +75,7 @@ async function route(request: Request): Promise<Response> {
       return createSwaggerUiResponse();
     }
     if (request.method === "GET" && url.pathname.startsWith("/docs/")) {
-      const asset = createSwaggerAssetResponse(url.pathname.slice("/docs/".length));
+      const asset = await createSwaggerAssetResponse(url.pathname.slice("/docs/".length), request);
       if (!asset) {
         return new Response(JSON.stringify({ error: "Not found" }), { status: 404, headers: withCorsHeaders(jsonHeaders) });
       }
@@ -119,7 +120,7 @@ async function route(request: Request): Promise<Response> {
       return await handleUploadProfilePicture(request);
     }
     if (request.method === "GET" && url.pathname.startsWith("/auth/profile-picture/")) {
-      return await handleGetProfilePicture(url.pathname.slice("/auth/profile-picture/".length));
+      return await handleGetProfilePicture(request, url.pathname.slice("/auth/profile-picture/".length));
     }
     if (request.method === "GET" && url.pathname === "/.well-known/jwks.json") {
       return new Response(JSON.stringify(getJwks()), { status: 200, headers: withCorsHeaders(jsonHeaders) });
@@ -173,7 +174,7 @@ async function route(request: Request): Promise<Response> {
       !url.pathname.startsWith("/admin/") &&
       !url.pathname.startsWith("/.well-known/")
     ) {
-      const staticResponse = await tryServeFrontend(url.pathname);
+      const staticResponse = await tryServeFrontend(url.pathname, request);
       if (staticResponse) {
         return staticResponse;
       }
@@ -627,7 +628,7 @@ async function performAvatarUpload(request: Request, userId: string): Promise<Re
   }
 }
 
-async function handleGetProfilePicture(userId: string) {
+async function handleGetProfilePicture(request: Request, userId: string) {
   if (!UUID_PATTERN.test(userId)) {
     return new Response(JSON.stringify({ error: "Invalid user id" }), { status: 400, headers: withCorsHeaders(jsonHeaders) });
   }
@@ -637,28 +638,25 @@ async function handleGetProfilePicture(userId: string) {
     return new Response(JSON.stringify({ error: "Not found" }), { status: 404, headers: withCorsHeaders(jsonHeaders) });
   }
 
-  return new Response(Bun.file(avatar.path), {
-    status: 200,
-    headers: withCorsHeaders({
-      "Content-Type": avatar.contentType,
-      "Cache-Control": "public, max-age=300",
-    }),
-  });
+  return await serveStaticFile(Bun.file(avatar.path), request, withCorsHeaders({
+    "Content-Type": avatar.contentType,
+    "Cache-Control": "public, max-age=300",
+  }));
 }
 
-async function tryServeFrontend(pathname: string): Promise<Response | null> {
+async function tryServeFrontend(pathname: string, request: Request): Promise<Response | null> {
   const decoded = decodeURIComponent(pathname);
   const relative = normalize(decoded).replace(/^(\.\.[/\\])+/, "").replace(/^\/+/, "");
   const candidate = join(config.frontendDistDir, relative || "index.html");
 
   const file = Bun.file(candidate);
   if (await file.exists()) {
-    return new Response(file);
+    return await serveStaticFile(file, request);
   }
 
   const indexFile = Bun.file(join(config.frontendDistDir, "index.html"));
   if (await indexFile.exists()) {
-    return new Response(indexFile);
+    return await serveStaticFile(indexFile, request);
   }
 
   return null;

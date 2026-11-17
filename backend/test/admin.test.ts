@@ -1,5 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import sharp from "sharp";
+import { config } from "../src/config.ts";
+import { migrateAvatars } from "../src/avatars.ts";
 import { call, createTestUser, login, loginOk, startApp, testSql, verifyWithJwks, type TestApp } from "./helpers.ts";
 
 let app: TestApp;
@@ -16,17 +18,8 @@ afterAll(() => app.stop());
 
 // 1x1 transparent PNG
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64");
-
-async function animatedGif(frames: number, width: number, height: number): Promise<Buffer> {
-  const colors = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 0]];
-  const pixels = Buffer.concat(Array.from({ length: frames }, (_, i) => {
-    const [r, g, b] = colors[i % colors.length];
-    return Buffer.from(Array.from({ length: width * height }, () => [r, g, b]).flat());
-  }));
-  return sharp(pixels, { raw: { width, height: height * frames, channels: 3, pageHeight: height } })
-    .gif({ delay: Array(frames).fill(100), loop: 0 })
-    .toBuffer();
-}
+// 2-frame animated GIF (16x16, red then blue)
+const ANIMATED_GIF = Buffer.from("R0lGODlhEAAQAIAAAExpcf8AACH/C05FVFNDQVBFMi4wAwEAAAAh+QQFCgAAACwAAAAAEAAQAAACDoyPqcvtD6OctNqLsz4FACH5BAUAAAAALAAAAAAQABAAgExpcQAA/wIOjI+py+0Po5y02ouzPgUAOw==", "base64");
 
 function imageForm(bytes: Uint8Array, name = "pic.png", type = "image/png") {
   const form = new FormData();
@@ -203,53 +196,105 @@ describe("own profile and avatars", () => {
     const token = (await loginOk(app, user)).access_token;
     const response = await fetch(`${app.url}/auth/profile-picture`, { method: "POST", headers: { authorization: `Bearer ${token}` }, body: imageForm(PNG) });
     expect(response.status).toBe(200);
-    expect((await response.json()).content_type).toBe("image/jpeg");
+    const { content_type } = await response.json();
+    expect(content_type).toBe("image/webp");
     const image = await fetch(`${app.url}/auth/profile-picture/${user.id}`);
     expect(image.status).toBe(200);
-    expect(image.headers.get("content-type")).toBe("image/jpeg");
+    expect(image.headers.get("content-type")).toBe(content_type);
   });
 
-  test("converts an animated GIF to an animated WebP", async () => {
+  test("keeps animated pictures animated as WebP", async () => {
     const user = await createTestUser();
     const token = (await loginOk(app, user)).access_token;
-    const gif = await animatedGif(3, 40, 20);
-    const response = await fetch(`${app.url}/auth/profile-picture`, { method: "POST", headers: { authorization: `Bearer ${token}` }, body: imageForm(gif, "pic.gif", "image/gif") });
-    expect(response.status).toBe(200);
-    expect((await response.json()).content_type).toBe("image/webp");
+    const upload = await fetch(`${app.url}/auth/profile-picture`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` },
+      body: imageForm(ANIMATED_GIF, "anim.gif", "image/gif"),
+    });
+    expect(upload.status).toBe(200);
+    expect((await upload.json()).content_type).toBe("image/webp");
+
     const image = await fetch(`${app.url}/auth/profile-picture/${user.id}`);
     expect(image.headers.get("content-type")).toBe("image/webp");
-    const meta = await sharp(Buffer.from(await image.arrayBuffer()), { animated: true }).metadata();
-    expect(meta.format).toBe("webp");
-    expect(meta.pages).toBe(3);
-    expect(meta.width).toBe(256);
-    expect(meta.pageHeight).toBe(256);
+    const bytes = new Uint8Array(await image.arrayBuffer());
+    expect((await sharp(bytes, { animated: true }).metadata()).pages).toBe(2);
   });
 
-  test("a static WebP upload becomes a JPEG", async () => {
+  test("still serves a legacy GIF until it is replaced", async () => {
     const user = await createTestUser();
-    const token = (await loginOk(app, user)).access_token;
-    const webp = await sharp(PNG).webp().toBuffer();
-    const response = await fetch(`${app.url}/auth/profile-picture`, { method: "POST", headers: { authorization: `Bearer ${token}` }, body: imageForm(webp, "pic.webp", "image/webp") });
-    expect((await response.json()).content_type).toBe("image/jpeg");
-  });
-
-  test("a picture stored as .gif before the WebP switch is still served and then replaced", async () => {
-    const user = await createTestUser();
-    await Bun.write(`${process.env.AVATAR_STORAGE_DIR}/${user.id}.gif`, await animatedGif(2, 16, 16));
+    const legacy = `${config.avatarStorageDir}/${user.id}.gif`;
+    await Bun.write(legacy, ANIMATED_GIF);
     expect((await fetch(`${app.url}/auth/profile-picture/${user.id}`)).headers.get("content-type")).toBe("image/gif");
+
     const token = (await loginOk(app, user)).access_token;
-    await fetch(`${app.url}/auth/profile-picture`, { method: "POST", headers: { authorization: `Bearer ${token}` }, body: imageForm(await animatedGif(2, 16, 16), "pic.gif", "image/gif") });
+    await fetch(`${app.url}/auth/profile-picture`, { method: "POST", headers: { authorization: `Bearer ${token}` }, body: imageForm(PNG) });
     expect((await fetch(`${app.url}/auth/profile-picture/${user.id}`)).headers.get("content-type")).toBe("image/webp");
-    expect(await Bun.file(`${process.env.AVATAR_STORAGE_DIR}/${user.id}.gif`).exists()).toBe(false);
+    expect(await Bun.file(legacy).exists()).toBe(false);
   });
 
-  test("replacing a GIF with a PNG serves the new picture", async () => {
+  test("serves an ETag and answers conditional requests with 304", async () => {
     const user = await createTestUser();
     const token = (await loginOk(app, user)).access_token;
-    const headers = { authorization: `Bearer ${token}` };
-    await fetch(`${app.url}/auth/profile-picture`, { method: "POST", headers, body: imageForm(await animatedGif(2, 16, 16), "pic.gif", "image/gif") });
-    await fetch(`${app.url}/auth/profile-picture`, { method: "POST", headers, body: imageForm(PNG) });
-    expect((await fetch(`${app.url}/auth/profile-picture/${user.id}`)).headers.get("content-type")).toBe("image/jpeg");
+    const url = `${app.url}/auth/profile-picture/${user.id}`;
+    expect((await fetch(url)).status).toBe(404);
+
+    await fetch(`${app.url}/auth/profile-picture`, { method: "POST", headers: { authorization: `Bearer ${token}` }, body: imageForm(PNG) });
+    const first = await fetch(url);
+    const etag = first.headers.get("etag");
+    expect(etag).toBeTruthy();
+    expect(first.status).toBe(200);
+
+    const revalidated = await fetch(url, { headers: { "if-none-match": etag! } });
+    expect(revalidated.status).toBe(304);
+    expect(revalidated.headers.get("etag")).toBe(etag);
+    expect(await revalidated.text()).toBe("");
+
+    // A new upload changes the file, so the old validator must not match.
+    await fetch(`${app.url}/auth/profile-picture`, { method: "POST", headers: { authorization: `Bearer ${token}` }, body: imageForm(ANIMATED_GIF, "anim.gif", "image/gif") });
+    const changed = await fetch(url, { headers: { "if-none-match": etag! } });
+    expect(changed.status).toBe(200);
+    expect(changed.headers.get("etag")).not.toBe(etag);
+  });
+
+  test("migrates legacy JPEG/GIF avatars to WebP", async () => {
+    const stillUser = await createTestUser();
+    const animatedUser = await createTestUser();
+    const avifUser = await createTestUser();
+    const stillLegacy = `${config.avatarStorageDir}/${stillUser.id}.jpg`;
+    const animatedLegacy = `${config.avatarStorageDir}/${animatedUser.id}.gif`;
+    const avifLegacy = `${config.avatarStorageDir}/${avifUser.id}.avif`;
+    await Bun.write(stillLegacy, PNG);
+    await Bun.write(animatedLegacy, ANIMATED_GIF);
+    await Bun.write(avifLegacy, await sharp(PNG).avif().toBuffer());
+
+    const result = await migrateAvatars();
+    expect(result.converted).toContain(`${stillUser.id}.jpg`);
+    expect(result.converted).toContain(`${animatedUser.id}.gif`);
+    expect(result.converted).toContain(`${avifUser.id}.avif`);
+    expect(await Bun.file(stillLegacy).exists()).toBe(false);
+    expect(await Bun.file(animatedLegacy).exists()).toBe(false);
+    expect(await Bun.file(avifLegacy).exists()).toBe(false);
+
+    const still = await fetch(`${app.url}/auth/profile-picture/${stillUser.id}`);
+    expect(still.headers.get("content-type")).toBe("image/webp");
+    const animated = await fetch(`${app.url}/auth/profile-picture/${animatedUser.id}`);
+    expect(animated.headers.get("content-type")).toBe("image/webp");
+    const bytes = new Uint8Array(await animated.arrayBuffer());
+    expect((await sharp(bytes, { animated: true }).metadata()).pages).toBe(2);
+    expect((await fetch(`${app.url}/auth/profile-picture/${avifUser.id}`)).headers.get("content-type")).toBe("image/webp");
+
+    // Re-running is a no-op.
+    const second = await migrateAvatars();
+    expect(second.converted).not.toContain(`${stillUser.id}.jpg`);
+  });
+
+  test("serves Swagger assets with ETags too", async () => {
+    const first = await fetch(`${app.url}/docs/swagger-ui.css`);
+    expect(first.status).toBe(200);
+    const etag = first.headers.get("etag");
+    expect(etag).toBeTruthy();
+    const revalidated = await fetch(`${app.url}/docs/swagger-ui.css`, { headers: { "if-none-match": etag! } });
+    expect(revalidated.status).toBe(304);
   });
 
   test("rejects a file that is not an image, and a missing file", async () => {

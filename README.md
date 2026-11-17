@@ -20,7 +20,7 @@ In production (see [Docker](#docker)), the backend serves the built frontend as 
 - `POST /auth/logout` to revoke refresh tokens
 - `POST /auth/change-password` to change the authenticated user's password
 - `GET /auth/me` / `PATCH /auth/me` to read/update the authenticated user's own profile
-- `POST /auth/profile-picture` to upload a profile picture (resized to 256x256, JPEG-compressed; animated GIFs/WebPs become animated WebP)
+- `POST /auth/profile-picture` to upload a profile picture (resized to 256x256 and stored as WebP, animated images stay animated)
 - `GET /auth/profile-picture/:userId` to fetch a user's profile picture
 - Admin user management: list/create/update users, roles, active status, and per-app scopes (see [Admin API](#admin-api))
 - Failed sign-in throttling and an `auth_events` audit log with retention and an admin view (see [Throttling and audit log](#throttling-and-audit-log))
@@ -231,22 +231,26 @@ Headers:
 Authorization: Bearer <access_token>
 ```
 
-Body: `multipart/form-data` with a `file` field containing a JPEG, PNG, WebP, or GIF image.
+Body: `multipart/form-data` with a `file` field containing a JPEG, PNG, WebP, AVIF, or GIF image.
 
-Static images are resized to 256x256 (cropped to fit) and re-encoded as JPEG at quality 82. Animated images (GIF or animated WebP) are resized to 256x256 and re-encoded as animated WebP at quality 80, preserving animation. The stored file replaces any previous profile picture for the user, including one saved in a different format.
+Every image is resized to 256x256 (cropped to fit) and re-encoded as WebP, including animated input (all frames and delays are preserved). Transparency is kept. WebP is used for everything because the legacy tracker mobile app's Flutter engine decodes WebP/animated WebP natively but does not bundle an AVIF codec. The stored file replaces any previous profile picture for the user.
+
+Existing `.jpg`, `.gif`, and `.avif` avatars can be converted in place with `bun run avatar:migrate` (optionally followed by a storage directory path). The script is idempotent and reports converted/skipped/failed files.
 
 Returns `413` if the upload exceeds `AVATAR_MAX_UPLOAD_BYTES`, and `400` if the file is missing, not a supported image format, or corrupted.
 
 On success:
 ```json
-{ "success": true, "content_type": "image/jpeg" }
+{ "success": true, "content_type": "image/webp" }
 ```
 
 `GET /auth/profile-picture/:userId`
 
-Returns the stored image bytes with the appropriate `Content-Type` (`image/jpeg`, `image/webp`, or `image/gif` for pictures stored before the WebP switch). Returns `404` if the user has no profile picture stored, and `400` if `userId` is not a valid UUID. This endpoint does not require authentication.
+Returns the stored image bytes with the appropriate `Content-Type` (`image/webp`, or `image/avif`/`image/jpeg`/`image/gif` for a picture uploaded by an older version that has not been migrated). Returns `404` if the user has no profile picture stored, and `400` if `userId` is not a valid UUID. This endpoint does not require authentication.
 
-Profile pictures are stored on the filesystem under `AVATAR_STORAGE_DIR`, named `<user_id>.jpg`, `<user_id>.webp`, or (legacy) `<user_id>.gif`. In Docker, mount a volume at `/app/data/avatars` (the default `AVATAR_STORAGE_DIR`) so uploads survive container restarts.
+The response carries a strong `ETag`. Send it back as `If-None-Match` to get a `304 Not Modified` when the picture has not changed. All file-backed static responses (frontend assets, Swagger UI assets, and profile pictures) support ETags.
+
+Profile pictures are stored on the filesystem under `AVATAR_STORAGE_DIR`, named `<user_id>.webp` (older `<user_id>.avif`, `.jpg`, and `.gif` files are still served). In Docker, mount a volume at `/app/backend/data/avatars` so uploads survive container restarts.
 
 ### JWKS
 

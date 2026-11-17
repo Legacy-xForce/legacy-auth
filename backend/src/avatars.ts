@@ -1,23 +1,26 @@
 import sharp from "sharp";
-import { unlink } from "fs/promises";
+import { readdir, unlink } from "fs/promises";
 import { config } from "./config.ts";
 
 const AVATAR_SIZE = 256;
-const JPEG_QUALITY = 82;
-const WEBP_QUALITY = 80;
+const WEBP_QUALITY = 82;
 
-const JPEG = { extension: "jpg", contentType: "image/jpeg" };
-const WEBP = { extension: "webp", contentType: "image/webp" };
-
-const SUPPORTED_FORMATS = new Set(["gif", "jpeg", "png", "webp"]);
-
-// "gif" is no longer written but stays here so avatars saved before the WebP switch are still served and cleaned up.
-const CONTENT_TYPES_BY_EXTENSION: Record<string, string> = {
-  jpg: JPEG.contentType,
-  webp: WEBP.contentType,
+// WebP is the only format we write: it is decoded natively by browsers and by
+// Flutter's engine (including animated WebP), unlike AVIF. The other extensions
+// are kept so pictures stored by earlier versions stay readable until migrated.
+const CONTENT_TYPES: Record<string, string> = {
+  webp: "image/webp",
+  avif: "image/avif",
+  jpg: "image/jpeg",
   gif: "image/gif",
 };
-const ALL_EXTENSIONS = Object.keys(CONTENT_TYPES_BY_EXTENSION);
+
+const CURRENT_EXTENSION = "webp";
+const LEGACY_EXTENSIONS = ["avif", "jpg", "gif"];
+const ALL_EXTENSIONS = [CURRENT_EXTENSION, ...LEGACY_EXTENSIONS];
+
+// sharp reports the decoder it used as metadata.format ("heif" covers AVIF/HEIC).
+const SUPPORTED_INPUT_FORMATS = new Set(["gif", "jpeg", "png", "webp", "heif"]);
 
 export const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -27,25 +30,26 @@ function avatarPath(userId: string, extension: string): string {
   return `${config.avatarStorageDir}/${userId}.${extension}`;
 }
 
+/** Resize and encode to WebP. `animated: true` keeps every frame of animated input. */
+export async function encodeAvatar(data: Uint8Array): Promise<Buffer> {
+  return await sharp(data, { animated: true })
+    .resize(AVATAR_SIZE, AVATAR_SIZE, { fit: "cover" })
+    .webp({ quality: WEBP_QUALITY })
+    .toBuffer();
+}
+
 export async function saveAvatar(userId: string, data: Uint8Array): Promise<{ extension: string; contentType: string }> {
-  const image = sharp(data, { animated: true });
-  const metadata = await image.metadata();
+  const metadata = await sharp(data, { animated: true }).metadata();
   const format = metadata.format ?? "";
-  if (!SUPPORTED_FORMATS.has(format)) {
+  if (!SUPPORTED_INPUT_FORMATS.has(format)) {
     throw new UnsupportedImageError(`Unsupported image format: ${format || "unknown"}`);
   }
 
-  const animated = (metadata.pages ?? 1) > 1;
-  const target = animated ? WEBP : JPEG;
+  const output = await encodeAvatar(data);
+  await removeAvatarFiles(userId, ALL_EXTENSIONS.filter((ext) => ext !== CURRENT_EXTENSION));
+  await Bun.write(avatarPath(userId, CURRENT_EXTENSION), output);
 
-  const output = animated
-    ? await image.resize(AVATAR_SIZE, AVATAR_SIZE, { fit: "cover" }).webp({ quality: WEBP_QUALITY }).toBuffer()
-    : await image.resize(AVATAR_SIZE, AVATAR_SIZE, { fit: "cover" }).flatten({ background: "#ffffff" }).jpeg({ quality: JPEG_QUALITY }).toBuffer();
-
-  await removeAvatarFiles(userId, ALL_EXTENSIONS.filter((ext) => ext !== target.extension));
-  await Bun.write(avatarPath(userId, target.extension), output);
-
-  return { extension: target.extension, contentType: target.contentType };
+  return { extension: CURRENT_EXTENSION, contentType: CONTENT_TYPES[CURRENT_EXTENSION] };
 }
 
 export async function deleteAvatar(userId: string): Promise<void> {
@@ -56,17 +60,60 @@ export async function findAvatar(userId: string): Promise<{ path: string; conten
   for (const extension of ALL_EXTENSIONS) {
     const path = avatarPath(userId, extension);
     if (await Bun.file(path).exists()) {
-      return { path, contentType: CONTENT_TYPES_BY_EXTENSION[extension] };
+      return { path, contentType: CONTENT_TYPES[extension] };
     }
   }
   return null;
 }
 
-async function removeAvatarFiles(userId: string, extensions: string[]): Promise<void> {
+/**
+ * Re-encode the avatar files written by older versions into 256x256 WebP.
+ * Existing WebP files are left alone; a legacy file is dropped when a WebP for
+ * the same user already exists, so the script is safe to re-run.
+ */
+export async function migrateAvatars(directory: string = config.avatarStorageDir): Promise<{ converted: string[]; skipped: string[]; failed: string[] }> {
+  const converted: string[] = [];
+  const skipped: string[] = [];
+  const failed: string[] = [];
+
+  const entries = (await readdir(directory)).filter((name) => /\.(jpg|gif|avif|webp)$/i.test(name));
+  for (const name of entries.sort()) {
+    const match = name.match(/^(.+)\.(jpg|gif|avif|webp)$/i);
+    if (!match) continue;
+    const [, userId, extension] = match;
+    const lower = extension.toLowerCase();
+    const target = `${directory}/${userId}.webp`;
+
+    if (lower === "webp") {
+      skipped.push(name);
+      continue;
+    }
+    if (await Bun.file(target).exists()) {
+      // A WebP is already the authoritative avatar for this user.
+      await removeAvatarFiles(userId, [extension], directory);
+      skipped.push(name);
+      continue;
+    }
+
+    try {
+      const bytes = new Uint8Array(await Bun.file(`${directory}/${name}`).arrayBuffer());
+      const output = await encodeAvatar(bytes);
+      await Bun.write(target, output);
+      await removeAvatarFiles(userId, [extension], directory);
+      converted.push(name);
+    } catch (error) {
+      failed.push(`${name}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  return { converted, skipped, failed };
+}
+
+async function removeAvatarFiles(userId: string, extensions: string[], directory: string = config.avatarStorageDir): Promise<void> {
   await Promise.all(
     extensions.map(async (extension) => {
       try {
-        await unlink(avatarPath(userId, extension));
+        await unlink(`${directory}/${userId}.${extension}`);
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
           throw error;

@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { withCorsHeaders } from "./cors.ts";
+import { serveStaticFile } from "./static.ts";
 
 const swaggerAssetDir = join(process.cwd(), "node_modules", "swagger-ui-dist");
 
@@ -64,16 +65,13 @@ export function createSwaggerUiResponse() {
   });
 }
 
-export function createSwaggerAssetResponse(assetName: string) {
+export async function createSwaggerAssetResponse(assetName: string, request: Request) {
   const contentType = swaggerAssetContentTypes[assetName];
   if (!contentType) {
     return null;
   }
 
-  return new Response(Bun.file(join(swaggerAssetDir, assetName)), {
-    status: 200,
-    headers: withCorsHeaders({
-      "Content-Type": contentType,
-    }),
-  });
+  return await serveStaticFile(Bun.file(join(swaggerAssetDir, assetName)), request, withCorsHeaders({
+    "Content-Type": contentType,
+  }));
 }

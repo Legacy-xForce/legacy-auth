@@ -256,7 +256,7 @@ export function createOpenApiDocument(): OpenApiDocument {
         post: {
           tags: ["Profile"],
           summary: "Upload the authenticated user's profile picture",
-          description: "Accepts JPEG, PNG, WebP, or GIF images. Static images are resized to 256x256 and re-encoded as compressed JPEG. Animated images (GIF or animated WebP) are resized to 256x256 and re-encoded as animated WebP so animation is preserved.",
+          description: "Accepts JPEG, PNG, WebP, AVIF, or GIF images. Every image is resized to 256x256 (cropped to fit) and re-encoded as WebP. Animated input stays animated; transparency is preserved.",
           security: [{ bearerAuth: [] }],
           requestBody: {
             required: true,
@@ -302,13 +302,18 @@ export function createOpenApiDocument(): OpenApiDocument {
           ],
           responses: {
             "200": {
-              description: "Profile picture image bytes (image/jpeg, image/webp, or legacy image/gif)",
+              description: "Profile picture image bytes (image/webp, or a legacy image/avif, image/jpeg, image/gif)",
+              headers: {
+                ETag: { description: "Validator for the stored file; send it back in If-None-Match to revalidate", schema: { type: "string" } },
+              },
               content: {
-                "image/jpeg": { schema: { type: "string", format: "binary" } },
+                "image/avif": { schema: { type: "string", format: "binary" } },
                 "image/webp": { schema: { type: "string", format: "binary" } },
+                "image/jpeg": { schema: { type: "string", format: "binary" } },
                 "image/gif": { schema: { type: "string", format: "binary" } },
               },
             },
+            "304": { description: "Not Modified — the If-None-Match header matched the current ETag" },
             "400": { description: "Invalid user id" },
             "404": { description: "No profile picture stored for this user" },
           },
@@ -604,7 +609,7 @@ export function createOpenApiDocument(): OpenApiDocument {
           required: ["success", "content_type"],
           properties: {
             success: { type: "boolean", example: true },
-            content_type: { type: "string", example: "image/jpeg" },
+            content_type: { type: "string", example: "image/webp", enum: ["image/webp"] },
           },
         },
         OidcTokenRequest: {

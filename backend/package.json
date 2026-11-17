@@ -9,7 +9,8 @@
     "test": "bun test",
     "user:add": "bun run src/scripts/add-user.ts",
     "user:set-active": "bun run src/scripts/set-user-active.ts",
-    "user:sync": "bun run src/scripts/sync-users.ts"
+    "user:sync": "bun run src/scripts/sync-users.ts",
+    "avatar:migrate": "bun run src/scripts/migrate-avatars.ts"
   },
   "devDependencies": {
     "@types/jsonwebtoken": "^9.0.10",

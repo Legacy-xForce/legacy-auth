@@ -12,6 +12,7 @@
     "start": "bun run --cwd backend start",
     "test": "bun run --cwd backend test",
     "user:add": "bun run --cwd backend user:add",
-    "user:set-active": "bun run --cwd backend user:set-active"
+    "user:set-active": "bun run --cwd backend user:set-active",
+    "avatar:migrate": "bun run --cwd backend avatar:migrate"
   }
 }
