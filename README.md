@@ -9,6 +9,8 @@ This is a monorepo (Bun workspaces):
 
 In production (see [Docker](#docker)), the backend serves the built frontend as static files on the same port, so the whole app is a single deployable image.
 
+Backend source is organized by concern: `backend/src/routes/` holds one module per domain, and each module registers its OpenAPI documentation together with its Hono handler (`registerXRoutes(app)`); `backend/src/middleware/` holds the auth guards; `backend/src/lib/` holds the shared client-IP, audit and OpenAPI helpers; and `backend/src/app.ts` is only the composition root and the `fetch` entry point.
+
 ## Features
 
 - An OpenID Provider (`/.well-known/openid-configuration`, `/authorize`, `/token`, `/userinfo`, `/logout`): Authorization Code + PKCE, a shared browser session across apps, and back-channel logout. See [OpenID Provider](#openid-provider).
@@ -24,7 +26,7 @@ In production (see [Docker](#docker)), the backend serves the built frontend as 
 - `GET /auth/profile-picture/:userId` to fetch a user's profile picture
 - Admin user management: list/create/update users, roles, active status, and per-app scopes (see [Admin API](#admin-api))
 - Failed sign-in throttling and an `auth_events` audit log with retention and an admin view (see [Throttling and audit log](#throttling-and-audit-log))
-- Swagger UI at `GET /docs`
+- Scalar API reference at `GET /docs`, generated from the Zod schemas with `@hono/zod-openapi`
 - OpenAPI spec at `GET /openapi.json`
 - JWT access tokens (ES256) + refresh tokens (HS256)
 - JWKS endpoint at `GET /.well-known/jwks.json` for public key discovery
@@ -248,7 +250,7 @@ On success:
 
 Returns the stored image bytes with the appropriate `Content-Type` (`image/webp`, or `image/avif`/`image/jpeg`/`image/gif` for a picture uploaded by an older version that has not been migrated). Returns `404` if the user has no profile picture stored, and `400` if `userId` is not a valid UUID. This endpoint does not require authentication.
 
-The response carries a strong `ETag`. Send it back as `If-None-Match` to get a `304 Not Modified` when the picture has not changed. All file-backed static responses (frontend assets, Swagger UI assets, and profile pictures) support ETags.
+The response carries a strong `ETag`. Send it back as `If-None-Match` to get a `304 Not Modified` when the picture has not changed. All file-backed static responses (frontend assets and profile pictures) support ETags.
 
 Profile pictures are stored on the filesystem under `AVATAR_STORAGE_DIR`, named `<user_id>.webp` (older `<user_id>.avif`, `.jpg`, and `.gif` files are still served). In Docker, mount a volume at `/app/backend/data/avatars` so uploads survive container restarts.
 
@@ -432,15 +434,19 @@ TEST_DATABASE_URL=postgres://postgres:postgres@localhost:54329/postgres bun run 
 
 It starts the real OpenID Provider and drives it over HTTP with a browser emulator (cookies, redirects, form posts), a software WebAuthn authenticator and stub back-channel endpoints, and it covers the issue's adversarial cases: code replay, `redirect_uri` substitution, PKCE downgrade, session fixation, login CSRF, cross-app token replay, refresh reuse, secrets at rest, rate limits and header hardening.
 
-## Swagger
+## API documentation
 
-Open the interactive docs at:
+The HTTP layer uses Hono with Zod schemas (`@hono/zod-openapi`), which validate request bodies and generate the OpenAPI document. The OpenID Provider's own endpoints are proxied rather than routed here, so they are documented from a static overlay that is merged into the generated document.
+
+Open the interactive Scalar reference at:
 
 `GET /docs`
 
-The raw OpenAPI document is available at:
+The generated OpenAPI document is available at:
 
 `GET /openapi.json`
+
+The Scalar bundle is loaded from a version-pinned jsDelivr URL. Self-hosting the bundle with Subresource Integrity would remove the remaining CDN dependency if stronger supply-chain guarantees are needed. Response compression is handled at the reverse proxy (e.g. Cloudflare Tunnel), not in the app — token-bearing responses are never compressed.
 
 ## Frontend
 
