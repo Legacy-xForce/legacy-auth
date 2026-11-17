@@ -67,15 +67,25 @@ export function registerPasskeyRoutes(app: OpenAPIHono<AppEnv>) {
 }
 
 async function handleLoginOptions(c: Ctx) {
-  const parsed = await c.req.json().catch(() => ({}));
-  const body: { username?: string } = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  let parsed: unknown;
+  try { parsed = c.req.raw.body === null ? {} : await c.req.json(); }
+  catch { return c.json({ error: "Malformed JSON in request body" } as any, 400); }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return c.json({ error: "A JSON object body is required" } as any, 400);
+  }
+  const body = parsed as { username?: string };
   const username = typeof body.username === "string" && body.username.trim() ? normalizeUsername(body.username) : undefined;
   return c.json(await generateLoginOptions(username) as any, 200);
 }
 
 async function handleLoginVerify(c: Ctx) {
-  const parsed = await c.req.json().catch(() => ({}));
-  const body = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  let parsed: unknown;
+  try { parsed = c.req.raw.body === null ? {} : await c.req.json(); }
+  catch { return c.json({ error: "Malformed JSON in request body" } as any, 400); }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return c.json({ error: "A JSON object body is required" } as any, 400);
+  }
+  const body = parsed as any;
   const throttle = throttleKeys(throttleIp(c));
   const retryAfter = retryAfterSeconds(throttle);
   if (retryAfter !== null) {
@@ -100,8 +110,13 @@ async function handleRegisterOptions(c: Ctx) {
 
 async function handleRegisterVerify(c: Ctx) {
   const user = c.get("user");
-  const parsed = await c.req.json().catch(() => ({}));
-  const body = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  let parsed: unknown;
+  try { parsed = c.req.raw.body === null ? {} : await c.req.json(); }
+  catch { return c.json({ error: "Malformed JSON in request body" } as any, 400); }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return c.json({ error: "A JSON object body is required" } as any, 400);
+  }
+  const body = parsed as any;
   try {
     const result = await verifyRegister(user.id, body);
     audit(c, { event: "passkey_register", success: true, userId: user.id, username: user.username, detail: result.credentialId });

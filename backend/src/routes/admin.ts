@@ -215,8 +215,13 @@ async function handleGetUser(c: Ctx) {
 async function handleUpdateUser(c: Ctx) {
   const actor = c.get("user");
   const id = c.req.param("id")!;
-  const parsedBody = await c.req.json<any>().catch(() => ({}));
-  const body = parsedBody && typeof parsedBody === "object" && !Array.isArray(parsedBody) ? parsedBody : {};
+  let parsedBody: unknown;
+  try { parsedBody = c.req.raw.body === null ? {} : await c.req.json(); }
+  catch { return c.json({ error: "Malformed JSON in request body" } as any, 400); }
+  if (!parsedBody || typeof parsedBody !== "object" || Array.isArray(parsedBody)) {
+    return c.json({ error: "A JSON object body is required" } as any, 400);
+  }
+  const body = parsedBody as any;
   let user = await findUserById(id);
   if (!user) return c.json({ error: "Not found" } as any, 404);
   const previousUsername = user.username;

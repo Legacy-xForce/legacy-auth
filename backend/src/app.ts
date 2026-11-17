@@ -68,9 +68,6 @@ export async function handleRequest(request: Request, server: PeerLookup): Promi
   const url = new URL(request.url);
   // The OP owns its own CORS and security headers; leave its responses untouched.
   if (oidc.handles(url.pathname)) return oidc.handle(request, clientIp(request));
-  // The original router only matched explicit GET/POST/... methods; Hono maps
-  // HEAD to GET, so reject it to keep the same observable behavior.
-  if (request.method === "HEAD") return applyCorsOrigin(request, new Response(null, { status: 404 }));
   if (request.method === "OPTIONS") return applyCorsOrigin(request, createCorsPreflightResponse(request));
 
   // Pass the Bun server as Hono's environment so getConnInfo() can read the peer.
