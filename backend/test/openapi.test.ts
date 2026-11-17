@@ -94,7 +94,10 @@ describe("/docs tells the truth", () => {
     expect(doc.paths["/authorize"].get.description).toContain("`nonce` is required");
   });
 
-  test("the Swagger page and its assets are served", async () => {
-    expect((await call(app, "GET", "/docs")).status).toBe(200);
+  test("the Scalar API reference is served from the generated document", async () => {
+    const docs = await call(app, "GET", "/docs");
+    expect(docs.status).toBe(200);
+    expect((docs.body as string).toLowerCase()).toContain("scalar");
+    expect(docs.body as string).toContain("/openapi.json");
   });
 });

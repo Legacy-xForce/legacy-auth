@@ -288,13 +288,13 @@ describe("own profile and avatars", () => {
     expect(second.converted).not.toContain(`${stillUser.id}.jpg`);
   });
 
-  test("serves Swagger assets with ETags too", async () => {
-    const first = await fetch(`${app.url}/docs/swagger-ui.css`);
-    expect(first.status).toBe(200);
-    const etag = first.headers.get("etag");
-    expect(etag).toBeTruthy();
-    const revalidated = await fetch(`${app.url}/docs/swagger-ui.css`, { headers: { "if-none-match": etag! } });
-    expect(revalidated.status).toBe(304);
+  test("serves the Scalar API reference pointed at the generated spec", async () => {
+    const docs = await fetch(`${app.url}/docs`);
+    expect(docs.status).toBe(200);
+    expect(docs.headers.get("content-type")).toContain("text/html");
+    const html = await docs.text();
+    expect(html.toLowerCase()).toContain("scalar");
+    expect(html).toContain("/openapi.json");
   });
 
   test("rejects a file that is not an image, and a missing file", async () => {

@@ -1,6 +1,6 @@
 import { withCorsHeaders } from "../cors.ts";
 import type { AuthEvent } from "../db.ts";
-import { jsonHeaders } from "../swagger.ts";
+import { jsonHeaders } from "../http.ts";
 import type { UserRecord } from "../types.ts";
 import {
   ClientExistsError,
