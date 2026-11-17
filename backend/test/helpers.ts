@@ -1,7 +1,7 @@
 import { SQL } from "bun";
 import { createHash, createPublicKey, generateKeyPairSync, randomBytes, sign } from "crypto";
 import jwt from "jsonwebtoken";
-import { bindServer, handleRequest } from "../src/app.ts";
+import { handleRequest } from "../src/app.ts";
 import { createUserWithActive, updateUserScopes } from "../src/db.ts";
 import { getJwks } from "../src/keys.ts";
 import type { UserRole, UserScopes } from "../src/types.ts";
@@ -13,7 +13,6 @@ export type TestApp = { url: string; stop: () => void };
 
 export function startApp(): TestApp {
   const server = Bun.serve({ port: 0, fetch: handleRequest });
-  bindServer(server);
   return { url: `http://localhost:${server.port}`, stop: () => server.stop(true) };
 }
 

@@ -1,5 +1,6 @@
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import { Scalar } from "@scalar/hono-api-reference";
+import { getConnInfo } from "hono/bun";
 import { config } from "./config.ts";
 import { applyCorsOrigin, createCorsPreflightResponse, withCorsHeaders } from "./cors.ts";
 import { findUserByUsername, findUserActiveByUsername, findUserById, saveRefreshToken, findRefreshTokenByJti, verifyRefreshTokenHash, claimRefreshToken, revokeRefreshFamily, revokeRefreshToken, revokeAllRefreshTokensForUser, updateUserPasswordHash, createUserWithActive, listUsersPaginated, updateUserProfile, updateUserScopes, deleteUserById, insertAuthEvent, listAuthEvents, AuthEvent } from "./db.ts";
@@ -32,15 +33,12 @@ import {
 } from "./passkey.ts";
 import { join, normalize } from "path";
 
-/** What the handlers need from the HTTP server: the socket address of a request. */
+/** The Bun server passed as the second argument to `fetch`. */
 export type PeerLookup = { requestIP(request: Request): { address: string } | null };
 
-let server: PeerLookup | undefined;
-
-/** Gives the handlers the server that is serving them, so they can read client addresses. */
-export function bindServer(bound: PeerLookup) {
-  server = bound;
-}
+// The client address is resolved once per request, in Hono middleware (or in the
+// wrapper for OIDC paths, which bypass Hono). Handlers read it by Request below.
+const ipCache = new WeakMap<Request, string | null>();
 
 type AppEnv = { Variables: { user: UserRecord } };
 
@@ -86,6 +84,13 @@ const requireAdmin = async (c: any, next: any) => {
 // ---------------------------------------------------------------------------
 function createApp() {
   const app = new OpenAPIHono<AppEnv>({ defaultHook });
+
+  // Resolve the peer address from Bun's server (Hono's `env`) and remember it
+  // for the handlers. This runs before every route and before validation.
+  app.use("*", async (c, next) => {
+    resolveClientIp(c.req.raw, c.env as PeerLookup);
+    await next();
+  });
 
   app.onError((error, c) => {
     console.error(error);
@@ -350,7 +355,10 @@ function createApp() {
     pageTitle: "Legacy Auth API Docs",
     cdn: "https://cdn.jsdelivr.net/npm/@scalar/api-reference@1.80.0",
   }));
-  app.get("*", (c) => tryServeFrontend(new URL(c.req.url).pathname, c.req.raw) as any);
+  app.get("*", async (c) => {
+    const staticResponse = await tryServeFrontend(new URL(c.req.url).pathname, c.req.raw);
+    return staticResponse ?? new Response(JSON.stringify({ error: "Not found" }), { status: 404, headers: withCorsHeaders(jsonHeaders) });
+  });
 
   return app;
 }
@@ -367,27 +375,55 @@ function markDeprecated(request: Request, response: Response): Response {
   return response;
 }
 
-/** Entry point for `Bun.serve({ fetch: handleRequest })`. */
-export async function handleRequest(request: Request): Promise<Response> {
+/** Entry point for `Bun.serve({ fetch: handleRequest })`. Bun passes the server as the 2nd argument. */
+export async function handleRequest(request: Request, server: PeerLookup): Promise<Response> {
+  resolveClientIp(request, server);
   const url = new URL(request.url);
   // The OP owns its own CORS and security headers; leave its responses untouched.
   if (oidc.handles(url.pathname)) return oidc.handle(request, clientIp(request));
   if (request.method === "OPTIONS") return applyCorsOrigin(request, createCorsPreflightResponse(request));
 
-  const response = markDeprecated(request, await app.fetch(request));
+  // Pass the Bun server as Hono's environment so getConnInfo() can read the peer.
+  const response = markDeprecated(request, await app.fetch(request, server));
   return applyCorsOrigin(request, response);
 }
 
-function clientIp(request: Request): string | null {
-  const peer = server?.requestIP(request)?.address ?? null;
+/**
+ * Read the socket address with Hono's Bun adapter (`getConnInfo`) and apply the
+ * TRUST_PROXY rules. Cached per Request so every handler sees the same address.
+ */
+function resolveClientIp(request: Request, server: PeerLookup): string | null {
+  const cached = ipCache.get(request);
+  if (cached !== undefined) return cached;
+
+  let peer: string | null = null;
+  try {
+    // getConnInfo only reads `env` and `req.raw`, so a minimal context is enough
+    // on the OIDC path which does not go through Hono's middleware.
+    const info = getConnInfo({ env: server, req: { raw: request } } as any);
+    peer = info.remote.address ?? null;
+  } catch (error) {
+    console.error("[conninfo] failed to read the client address", error);
+  }
+
+  // Forwarded headers are believed only from a proxy on a private address: a
+  // client reaching the port directly could otherwise claim any IP.
   if (config.trustProxy && peer && isPrivateAddress(peer)) {
     const forwarded = (request.headers.get("x-forwarded-for") ?? "")
       .split(",").map((entry) => entry.trim()).filter((entry) => entry.length > 0);
     for (let i = forwarded.length - 1; i >= 0; i--) {
-      if (!isPrivateAddress(forwarded[i])) return forwarded[i];
+      if (!isPrivateAddress(forwarded[i])) {
+        ipCache.set(request, forwarded[i]);
+        return forwarded[i];
+      }
     }
   }
+  ipCache.set(request, peer);
   return peer;
+}
+
+function clientIp(request: Request): string | null {
+  return ipCache.get(request) ?? null;
 }
 
 function throttleIp(request: Request): string | null {
