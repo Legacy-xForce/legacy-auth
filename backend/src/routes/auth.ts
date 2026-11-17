@@ -16,7 +16,7 @@ import { oidc } from "../oidc/index.ts";
 import { LoginRequest, RefreshRequest, ChangePasswordRequest, TokenResponse, LogoutResponse, ChangePasswordResponse, ErrorResponse } from "../schemas.ts";
 import { audit, tooManyAttempts } from "../lib/audit.ts";
 import { throttleIp } from "../lib/client-ip.ts";
-import { requireAuth } from "../middleware/auth.ts";
+import { requireAuth, requireToken } from "../middleware/auth.ts";
 import type { AppEnv, JsonCtx } from "../lib/context.ts";
 
 type LoginBody = { username: string; password: string; audience?: "calendar" | "tracker" };
@@ -74,7 +74,7 @@ export function registerAuthRoutes(app: OpenAPIHono<AppEnv>) {
     createRoute({
       method: "post", path: "/auth/change-password", tags: ["Auth"],
       summary: "Change the authenticated user's password", security: [{ bearerAuth: [] }],
-      middleware: [requireAuth as any],
+      middleware: [requireToken as any],
       request: { body: { required: true, content: { "application/json": { schema: ChangePasswordRequest } } } },
       responses: {
         200: { description: "Password changed successfully", content: { "application/json": { schema: ChangePasswordResponse } } },
@@ -91,7 +91,7 @@ export function registerAuthRoutes(app: OpenAPIHono<AppEnv>) {
 async function handleLogin(c: JsonCtx<LoginBody>) {
   const { audience: requestedAudience } = c.req.valid("json");
   const username = normalizeUsername(c.req.valid("json").username);
-  const password = c.req.valid("json").password;
+  const password = String(c.req.valid("json").password ?? "");
   if (!username || !password) {
     return c.json({ error: "username and password are required" }, 400);
   }
@@ -167,7 +167,7 @@ async function handleLogin(c: JsonCtx<LoginBody>) {
 }
 
 async function handleRefresh(c: JsonCtx<RefreshBody>) {
-  const rawToken = c.req.valid("json").refresh_token;
+  const rawToken = String(c.req.valid("json").refresh_token ?? "");
   if (!rawToken) return c.json({ error: "refresh_token is required" }, 400);
 
   let payload;
@@ -227,7 +227,7 @@ async function handleRefresh(c: JsonCtx<RefreshBody>) {
 }
 
 async function handleLogout(c: JsonCtx<RefreshBody>) {
-  const rawToken = c.req.valid("json").refresh_token;
+  const rawToken = String(c.req.valid("json").refresh_token ?? "");
   if (!rawToken) return c.json({ error: "refresh_token is required" }, 400);
 
   let payload;
@@ -240,10 +240,14 @@ async function handleLogout(c: JsonCtx<RefreshBody>) {
 }
 
 async function handleChangePassword(c: JsonCtx<ChangePasswordBody>) {
-  const user = c.get("user");
-  const { current_password: currentPassword, new_password: newPassword } = c.req.valid("json");
+  const { current_password: currentPasswordValue, new_password: newPasswordValue } = c.req.valid("json");
+  const currentPassword = String(currentPasswordValue ?? "");
+  const newPassword = String(newPasswordValue ?? "");
   if (!currentPassword || !newPassword) return c.json({ error: "current_password and new_password are required" }, 400);
   if (currentPassword === newPassword) return c.json({ error: "new_password must be different from current_password" }, 400);
+
+  const user = await findUserById(c.get("userId"));
+  if (!user) return c.json({ error: "Invalid access token" }, 401);
   if (!user.active) {
     await revokeAllRefreshTokensForUser(user.id);
     invalidateCachedUser(user.username);

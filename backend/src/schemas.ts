@@ -13,19 +13,21 @@ import { APP_AUDIENCES } from "./types.ts";
 const audienceDescription =
   "The app the session is for. The access token's `aud` is then just this app, and the request is refused when the user's scopes do not include it. Omitted, `aud` lists every app the user's scopes allow — unless the service runs with REQUIRE_AUDIENCE=true, in which case omitting it is a 400.";
 
+// Fields are coerced/optional so the handlers keep their original validation
+// messages and status codes; the OpenAPI metadata still documents the wire shape.
 export const LoginRequest = z.object({
-  username: z.string().openapi({ example: "alice" }),
-  password: z.string().openapi({ example: "secret" }),
-  audience: z.enum(APP_AUDIENCES).optional().openapi({ description: audienceDescription }),
+  username: z.coerce.string().optional().openapi({ example: "alice" }),
+  password: z.coerce.string().optional().openapi({ example: "secret" }),
+  audience: z.coerce.string().optional().openapi({ description: audienceDescription, enum: [...APP_AUDIENCES] }),
 }).openapi("LoginRequest");
 
 export const RefreshRequest = z.object({
-  refresh_token: z.string().openapi({ example: "eyJhbGciOi..." }),
+  refresh_token: z.coerce.string().optional().openapi({ example: "eyJhbGciOi..." }),
 }).openapi("RefreshRequest");
 
 export const ChangePasswordRequest = z.object({
-  current_password: z.string().openapi({ example: "old-secret" }),
-  new_password: z.string().openapi({ example: "new-secret" }),
+  current_password: z.coerce.string().optional().openapi({ example: "old-secret" }),
+  new_password: z.coerce.string().optional().openapi({ example: "new-secret" }),
 }).openapi("ChangePasswordRequest");
 
 export const ChangePasswordResponse = z.object({

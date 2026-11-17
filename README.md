@@ -446,7 +446,7 @@ The generated OpenAPI document is available at:
 
 `GET /openapi.json`
 
-The Scalar bundle is loaded from a version-pinned jsDelivr URL. Response compression is handled at the reverse proxy (e.g. Cloudflare Tunnel), not in the app — token-bearing responses are never compressed.
+The Scalar bundle is loaded from a version-pinned jsDelivr URL. Self-hosting the bundle with Subresource Integrity would remove the remaining CDN dependency if stronger supply-chain guarantees are needed. Response compression is handled at the reverse proxy (e.g. Cloudflare Tunnel), not in the app — token-bearing responses are never compressed.
 
 ## Frontend
 

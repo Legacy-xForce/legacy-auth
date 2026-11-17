@@ -1,4 +1,4 @@
-import { getConnInfo } from "hono/bun";
+import { getConnInfo } from "@hono/bun";
 import { config } from "../config.ts";
 import { isPrivateAddress } from "../throttle.ts";
 import type { Ctx } from "./context.ts";

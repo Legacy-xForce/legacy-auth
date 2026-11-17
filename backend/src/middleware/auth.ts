@@ -22,6 +22,17 @@ async function resolveUser(c: Ctx): Promise<AuthResult> {
   return { ok: true, user };
 }
 
+/** Verifies the bearer token only; the handler resolves the user at its own point. */
+export const requireToken = async (c: Ctx, next: () => Promise<void>) => {
+  const token = bearerToken(c);
+  if (!token) return c.json({ error: "Authorization bearer token is required" }, 401);
+  let payload;
+  try { payload = verifyAccessToken(token); }
+  catch { return c.json({ error: "Invalid access token" }, 401); }
+  c.set("userId", payload.sub);
+  await next();
+};
+
 /** Verifies the bearer token, attaches the user to the context, then continues. */
 export const requireAuth = async (c: Ctx, next: () => Promise<void>) => {
   const result = await resolveUser(c);

@@ -8,7 +8,7 @@ import {
 import { displayNameFromInput, normalizeUsername } from "../usernames.ts";
 import { invalidateCachedUser } from "../cache.ts";
 import { oidc } from "../oidc/index.ts";
-import { saveAvatar, deleteAvatar, UnsupportedImageError } from "../avatars.ts";
+import { saveAvatar, deleteAvatar, UnsupportedImageError, UUID_PATTERN } from "../avatars.ts";
 import { APP_AUDIENCES, type UserRole, type UserScopes, type UserRecord } from "../types.ts";
 import { AuditEventsResponse, ErrorResponse } from "../schemas.ts";
 import { audit } from "../lib/audit.ts";
@@ -18,7 +18,19 @@ import type { AppEnv, Ctx, JsonCtx, QueryCtx } from "../lib/context.ts";
 
 type CreateUserBody = { username?: string; display_name?: string; password?: string; role?: string; active?: boolean };
 type ListUsersQuery = { page: number; pageSize: number; q?: string; role?: string };
-type AuditQuery = { event?: string; success?: "true" | "false"; userId?: string; username?: string; since?: string; until?: string; page: number; pageSize: number };
+type AuditQuery = { event?: string; success?: string; userId?: string; username?: string; since?: string; until?: string; page: number; pageSize: number };
+
+// Query strings can arrive as arrays when a key repeats. The original router used
+// `searchParams.get()` (first value) and sanitised with Math.trunc/Number.
+const firstValue = (value: unknown) => Array.isArray(value) ? value[0] : value;
+const positiveInt = (fallback: number, cap: number) =>
+  z.preprocess(firstValue, z.any()).transform((value) => {
+    const parsed = Math.trunc(Number(value ?? fallback)) || fallback;
+    return Math.min(cap, Math.max(1, parsed));
+  });
+const firstString = z.preprocess(firstValue, z.string().optional());
+const notFoundOnInvalid: (result: any, c: any) => any = (result, c) =>
+  result.success ? undefined : c.json({ error: "Not found" }, 404);
 
 export function registerAdminRoutes(app: OpenAPIHono<AppEnv>) {
   app.openapi(
@@ -26,10 +38,10 @@ export function registerAdminRoutes(app: OpenAPIHono<AppEnv>) {
       method: "get", path: "/admin/users", tags: ["Admin"],
       summary: "List users", security: [{ bearerAuth: [] }], middleware: [requireAdmin as any],
       request: { query: z.object({
-        page: z.coerce.number().int().min(1).default(1),
-        pageSize: z.coerce.number().int().min(1).transform((value) => Math.min(100, value)).default(20),
-        q: z.string().optional(),
-        role: z.string().optional(),
+        page: positiveInt(1, Number.MAX_SAFE_INTEGER),
+        pageSize: positiveInt(20, 100),
+        q: firstString,
+        role: firstString,
       }) },
       responses: { 200: { description: "A page of users" }, 401: { description: "Unauthorized" }, 403: { description: "Admin role required" } },
     }),
@@ -49,7 +61,7 @@ export function registerAdminRoutes(app: OpenAPIHono<AppEnv>) {
     (c) => handleCreateUser(c as JsonCtx<CreateUserBody>),
   );
 
-  const paramId = { params: z.object({ id: z.string() }) } as const;
+  const paramId = { params: z.object({ id: z.string().regex(UUID_PATTERN) }) } as const;
   app.openapi(
     createRoute({
       method: "get", path: "/admin/users/{id}", tags: ["Admin"],
@@ -57,6 +69,7 @@ export function registerAdminRoutes(app: OpenAPIHono<AppEnv>) {
       responses: { 200: { description: "The user" }, 403: { description: "Admin role required" }, 404: { description: "Not found" } },
     }),
     (c) => handleGetUser(c as Ctx),
+    notFoundOnInvalid,
   );
 
   app.openapi(
@@ -66,6 +79,7 @@ export function registerAdminRoutes(app: OpenAPIHono<AppEnv>) {
       responses: { 200: { description: "The updated user" }, 403: { description: "Admin role required" }, 404: { description: "Not found" } },
     }),
     (c) => handleUpdateUser(c as Ctx),
+    notFoundOnInvalid,
   );
 
   app.openapi(
@@ -75,17 +89,20 @@ export function registerAdminRoutes(app: OpenAPIHono<AppEnv>) {
       responses: { 204: { description: "Deleted" }, 400: { description: "Cannot delete your own account" }, 403: { description: "Admin role required" }, 404: { description: "Not found" } },
     }),
     (c) => handleDeleteUser(c as Ctx),
+    notFoundOnInvalid,
   );
 
+  const parseableDate = (field: string) =>
+    firstString.refine((value) => value === undefined || !Number.isNaN(new Date(value).getTime()), `${field} must be an ISO 8601 date`);
   const auditQuery = z.object({
-    event: z.string().optional(),
-    success: z.enum(["true", "false"]).optional(),
-    userId: z.string().uuid().optional(),
-    username: z.string().optional(),
-    since: z.string().datetime().optional(),
-    until: z.string().datetime().optional(),
-    page: z.coerce.number().int().min(1).default(1),
-    pageSize: z.coerce.number().int().min(1).transform((value) => Math.min(200, value)).default(50),
+    event: firstString,
+    success: firstString.refine((value) => value === undefined || value === "true" || value === "false", "success must be true or false"),
+    userId: firstString.refine((value) => value === undefined || UUID_PATTERN.test(value), "userId must be a UUID"),
+    username: firstString,
+    since: parseableDate("since"),
+    until: parseableDate("until"),
+    page: positiveInt(1, Number.MAX_SAFE_INTEGER),
+    pageSize: positiveInt(50, 200),
   });
   app.openapi(
     createRoute({
@@ -104,8 +121,9 @@ export function registerAdminRoutes(app: OpenAPIHono<AppEnv>) {
     (c) => handleListAuditEvents(c as QueryCtx<AuditQuery>),
     (result, c: any) => {
       if (result.success) return undefined;
-      const field = String(result.error?.issues?.[0]?.path?.[0] ?? "filter");
-      return c.json({ error: `Invalid ${field}` }, 400);
+      const issue = result.error?.issues?.[0];
+      const field = String(issue?.path?.[0] ?? "filter");
+      return c.json({ error: issue?.message ? String(issue.message) : `Invalid ${field}` }, 400);
     },
   );
 
@@ -197,7 +215,8 @@ async function handleGetUser(c: Ctx) {
 async function handleUpdateUser(c: Ctx) {
   const actor = c.get("user");
   const id = c.req.param("id")!;
-  const body = await c.req.json<any>().catch(() => ({}));
+  const parsedBody = await c.req.json<any>().catch(() => ({}));
+  const body = parsedBody && typeof parsedBody === "object" && !Array.isArray(parsedBody) ? parsedBody : {};
   let user = await findUserById(id);
   if (!user) return c.json({ error: "Not found" } as any, 404);
   const previousUsername = user.username;
@@ -255,7 +274,9 @@ async function handleDeleteUser(c: Ctx) {
 }
 
 async function handleUploadUserAvatar(c: Ctx) {
-  const target = await findUserById(c.req.param("id")!);
+  const id = c.req.param("id")!;
+  if (!UUID_PATTERN.test(id)) return c.json({ error: "Not found" } as any, 404);
+  const target = await findUserById(id);
   if (!target) return c.json({ error: "Not found" } as any, 404);
   return performAvatarUpload(c, target.id);
 }

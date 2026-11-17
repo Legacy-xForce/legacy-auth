@@ -33,15 +33,16 @@ export function registerMetaRoutes(app: OpenAPIHono<AppEnv>) {
     },
   );
 
+  // Generated once at startup, after all routes are registered, like the old
+  // hand-written document.
+  const openApiDocument = applyDocOverlay(app.getOpenAPIDocument({
+    openapi: "3.0.3",
+    info: { title: "Legacy Auth Service", version: "0.1.0", description: "Authentication service for the Legacy ecosystem." },
+    servers: [{ url: "/" }],
+  }) as any);
+
   app.get("/health", (c) => c.json({ status: "ok" }));
-  app.get("/openapi.json", (c) => {
-    const generated = app.getOpenAPIDocument({
-      openapi: "3.0.3",
-      info: { title: "Legacy Auth Service", version: "0.1.0", description: "Authentication service for the Legacy ecosystem." },
-      servers: [{ url: "/" }],
-    });
-    return c.json(applyDocOverlay(generated as any));
-  });
+  app.get("/openapi.json", (c) => c.json(openApiDocument));
   // Pin the Scalar bundle version so a CDN release cannot change the docs page.
   app.get("/docs", Scalar({
     url: "/openapi.json",
@@ -49,15 +50,27 @@ export function registerMetaRoutes(app: OpenAPIHono<AppEnv>) {
     cdn: "https://cdn.jsdelivr.net/npm/@scalar/api-reference@1.80.0",
   }));
 
-  // Frontend catch-all must be registered last.
+  // Frontend catch-all must be registered last. Never let an unmatched API,
+  // well-known, or docs path fall through to the SPA.
   app.get("*", async (c) => {
-    const staticResponse = await tryServeFrontend(new URL(c.req.url).pathname, c.req.raw);
+    const pathname = new URL(c.req.url).pathname;
+    if (
+      pathname.startsWith("/auth/") ||
+      pathname.startsWith("/admin/") ||
+      pathname.startsWith("/.well-known/") ||
+      pathname.startsWith("/docs/")
+    ) {
+      return c.json({ error: "Not found" } as any, 404);
+    }
+    const staticResponse = await tryServeFrontend(pathname, c.req.raw);
     return staticResponse ?? c.json({ error: "Not found" } as any, 404);
   });
 }
 
 async function tryServeFrontend(pathname: string, request: Request): Promise<Response | null> {
-  const decoded = decodeURIComponent(pathname);
+  let decoded: string;
+  try { decoded = decodeURIComponent(pathname); }
+  catch { return null; }
   const relative = normalize(decoded).replace(/^(\.\.[/\\])+/, "").replace(/^\/+/, "");
   const candidate = join(config.frontendDistDir, relative || "index.html");
   const file = Bun.file(candidate);

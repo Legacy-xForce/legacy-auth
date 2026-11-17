@@ -67,13 +67,15 @@ export function registerPasskeyRoutes(app: OpenAPIHono<AppEnv>) {
 }
 
 async function handleLoginOptions(c: Ctx) {
-  const body = await c.req.json<{ username?: string }>().catch(() => ({}) as { username?: string });
+  const parsed = await c.req.json().catch(() => ({}));
+  const body: { username?: string } = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
   const username = typeof body.username === "string" && body.username.trim() ? normalizeUsername(body.username) : undefined;
   return c.json(await generateLoginOptions(username) as any, 200);
 }
 
 async function handleLoginVerify(c: Ctx) {
-  const body = await c.req.json().catch(() => ({}));
+  const parsed = await c.req.json().catch(() => ({}));
+  const body = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
   const throttle = throttleKeys(throttleIp(c));
   const retryAfter = retryAfterSeconds(throttle);
   if (retryAfter !== null) {
@@ -98,7 +100,8 @@ async function handleRegisterOptions(c: Ctx) {
 
 async function handleRegisterVerify(c: Ctx) {
   const user = c.get("user");
-  const body = await c.req.json().catch(() => ({}));
+  const parsed = await c.req.json().catch(() => ({}));
+  const body = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
   try {
     const result = await verifyRegister(user.id, body);
     audit(c, { event: "passkey_register", success: true, userId: user.id, username: user.username, detail: result.credentialId });

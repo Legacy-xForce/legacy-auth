@@ -83,9 +83,15 @@ export function registerOidcAdminRoutes(app: OpenAPIHono<AppEnv>) {
     responses: { "200": { description: "The client" }, "404": { description: "Unknown client" }, "409": { description: "The client has no secret yet" } },
   }));
 
+  // Hono's `/admin/oidc/*` also matches `/admin/oidc` without the slash; the
+  // original router only handled the prefixed form and 404'd the bare path.
+  const oidcAdminGuard = async (c: Ctx, next: () => Promise<void>) => {
+    if (!new URL(c.req.url).pathname.startsWith("/admin/oidc/")) return next();
+    return requireAdmin(c, next);
+  };
   // One catch-all handler for the client registry; its own field validation and
   // exact error messages are deliberately left intact.
-  app.all("/admin/oidc/*", requireAdmin as any, handleOidcAdminRoute);
+  app.all("/admin/oidc/*", oidcAdminGuard as any, handleOidcAdminRoute);
 }
 
 async function handleOidcAdminRoute(c: Ctx) {
