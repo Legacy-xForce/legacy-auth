@@ -6,8 +6,10 @@ import Icon from "./Icon.vue";
 const props = withDefaults(defineProps<{ userId: string; name?: string; size?: number; version?: number }>(), { size: 40 });
 
 const failed = ref(false);
+// A new user OR a new avatar version means the previous image (and its load
+// failure, e.g. 404 before the first upload) no longer applies.
 watch(
-  () => props.userId,
+  [() => props.userId, () => props.version],
   () => {
     failed.value = false;
   }

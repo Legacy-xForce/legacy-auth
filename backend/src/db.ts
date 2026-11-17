@@ -349,7 +349,8 @@ export async function listUsersPaginated(filters: UserListFilters): Promise<{ it
     FROM counted
     LEFT JOIN (
       SELECT * FROM matches ORDER BY lower(username) ASC LIMIT ${filters.pageSize} OFFSET ${offset}
-    ) page ON true;
+    ) page ON true
+    ORDER BY lower(page.username) ASC NULLS LAST;
   `;
 
   return {
@@ -636,7 +637,8 @@ export async function listAuthEvents(filters: AuthEventFilters): Promise<{ items
     FROM counted
     LEFT JOIN (
       SELECT * FROM matches ORDER BY created_at DESC, id DESC LIMIT ${filters.pageSize} OFFSET ${offset}
-    ) page ON true;
+    ) page ON true
+    ORDER BY page.created_at DESC NULLS LAST, page.id DESC NULLS LAST;
   `;
 
   return {

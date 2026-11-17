@@ -25,6 +25,8 @@ async function onSelected(event: Event) {
   const target = event.target as HTMLInputElement;
   const file = target.files?.[0];
   if (!file) return;
+  // Clear a previous inline error as soon as a new upload starts.
+  emit("error", "");
   const formData = new FormData();
   formData.append("file", file);
   try {

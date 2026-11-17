@@ -160,6 +160,7 @@ function formatDate(value: string) {
         :user-id="auth.user.id"
         :name="auth.user.display_name || auth.user.username"
         endpoint="/auth/profile-picture"
+        @uploaded="avatarError = ''"
         @error="avatarError = $event"
       />
       <div class="min-w-0">

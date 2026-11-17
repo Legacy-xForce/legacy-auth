@@ -3,7 +3,7 @@ import { ref } from "vue";
 import { useRouter, useRoute } from "vue-router";
 import { useAuthStore } from "../stores/auth";
 import { isPasskeySupported } from "../services/webauthn";
-import { describePasskeyError, errorMessage } from "../utils/errors";
+import { apiErrorMessage, describePasskeyError } from "../utils/errors";
 import { APP_NAME } from "../constants";
 import AuthShell from "../components/AuthShell.vue";
 import SignInForm from "../components/SignInForm.vue";
@@ -27,7 +27,7 @@ async function onSubmit(username: string, password: string) {
     await auth.login(username, password);
     router.push(redirect());
   } catch (err) {
-    error.value = errorMessage(err, "Unable to sign in.");
+    error.value = apiErrorMessage(err, "Unable to sign in.");
   } finally {
     loading.value = false;
   }

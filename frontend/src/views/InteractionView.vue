@@ -102,7 +102,8 @@ async function onPasskey(hint?: string) {
     const result = await call<{ redirect: string }>("passkey/verify", { body: assertion });
     proceed(result.redirect);
   } catch (failure: any) {
-    error.value = describePasskeyError(failure, explain(failure, failure?.message || "Passkey sign-in failed."));
+    if (failure instanceof InteractionError && failure.status === 410) expired.value = true;
+    error.value = describePasskeyError(failure, failure?.message || "Passkey sign-in failed.");
   } finally {
     passkeyLoading.value = false;
   }
@@ -136,6 +137,8 @@ async function onCancel() {
       heading="h2"
       title="This sign-in link has expired"
       description="Go back to the app you came from and start signing in again."
+      tone="warning"
+      surface
       data-testid="expired"
     />
 

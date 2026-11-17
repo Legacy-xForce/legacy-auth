@@ -12,6 +12,8 @@ type ProxyEnv = { Bindings: { socketPath: string; ip: string | null; status: "ru
 type ProxyRoute = {
   path: string;
   prefix: boolean;
+  /** Hono pattern when `path/*` would be too broad (e.g. bare `/interaction` is not an OP path). */
+  pattern?: string;
   throttle?: boolean;
   failure?: "status" | "redirect";
   cacheable?: boolean;
@@ -24,7 +26,7 @@ const ROUTES: ProxyRoute[] = [
   { path: "/userinfo", prefix: false },
   { path: "/logout", prefix: false },
   { path: "/logout/", prefix: true },
-  { path: "/interaction/", prefix: true },
+  { path: "/interaction/", prefix: true, pattern: "/interaction/:uid/*" },
   { path: "/.well-known/openid-configuration", prefix: false, cacheable: true },
 ];
 
@@ -32,7 +34,7 @@ export const isOidcPath = (pathname: string) =>
   ROUTES.some((route) => (route.prefix ? pathname.startsWith(route.path) : pathname === route.path));
 
 /** The same paths as Hono route patterns, so the front door registers them instead of branching on the URL. */
-export const OIDC_ROUTE_PATTERNS = ROUTES.map((route) => (route.prefix ? `${route.path}*` : route.path));
+export const OIDC_ROUTE_PATTERNS = ROUTES.map((route) => route.pattern ?? (route.prefix ? `${route.path}*` : route.path));
 
 // What the client could have forged. The proxy states each of these itself.
 const STRIPPED_REQUEST_HEADERS = ["x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "x-forwarded-port", "x-real-ip", "forwarded", "x-client-ip", "host"];
@@ -71,11 +73,19 @@ function hardened(c: Context<ProxyEnv>, response: Response, cacheable: boolean):
     headers.set("cache-control", "no-store");
     headers.set("pragma", "no-cache");
   }
-  // Hono's Context helpers take a plain header record. Keep every Set-Cookie
-  // (the OP may set more than one) as an array rather than a combined value.
+  // Hono's Context helpers take a plain header record. Collect repeated headers
+  // as arrays (Set-Cookie, WWW-Authenticate, Link, ...) so none are lost the way
+  // Object.fromEntries(Headers) would lose all but the last value.
   const record: Record<string, string | string[]> = {};
   for (const [key, value] of headers.entries()) {
-    record[key] = key === "set-cookie" ? (headers.getSetCookie?.() ?? [value]) : value;
+    const existing = record[key];
+    if (key === "set-cookie") {
+      record[key] = headers.getSetCookie?.() ?? [value];
+    } else if (existing === undefined) {
+      record[key] = value;
+    } else {
+      record[key] = Array.isArray(existing) ? [...existing, value] : [existing, value];
+    }
   }
   return c.newResponse(response.body, response.status as any, record);
 }
@@ -133,7 +143,7 @@ function proxyHandler(route: ProxyRoute) {
 export function createOidcProxyApp(): Hono<ProxyEnv> {
   const app = new Hono<ProxyEnv>();
   for (const route of ROUTES) {
-    app.all(route.prefix ? `${route.path}*` : route.path, proxyHandler(route));
+    app.all(route.pattern ?? (route.prefix ? `${route.path}*` : route.path), proxyHandler(route));
   }
   return app;
 }

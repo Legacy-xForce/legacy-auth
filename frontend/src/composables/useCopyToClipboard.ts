@@ -11,7 +11,12 @@ export function useCopyToClipboard(duration = 1500, registerCleanup = true) {
 
   async function copy(text: string, successMessage?: string): Promise<boolean> {
     if (!text) return false;
-    await navigator.clipboard.writeText(text);
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      // Clipboard access can be denied (insecure context, permissions).
+      return false;
+    }
     copied.value = true;
     if (successMessage) useToastStore().success(successMessage);
     clearTimeout(timer);

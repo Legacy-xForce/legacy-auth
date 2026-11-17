@@ -56,10 +56,6 @@ function onPasskey() {
   emit("passkey", username.value.trim() || undefined);
 }
 
-function clearPassword() {
-  password.value = "";
-}
-defineExpose({ clearPassword });
 </script>
 
 <template>

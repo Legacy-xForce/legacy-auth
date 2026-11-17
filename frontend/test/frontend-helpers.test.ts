@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { APP_SCOPES, ROLE_FILTER_OPTIONS, ROLE_LABELS, ROLE_OPTIONS } from "../src/constants";
-import { describePasskeyError, errorMessage, missingFields } from "../src/utils/errors";
+import { apiErrorMessage, describePasskeyError, errorMessage, missingFields } from "../src/utils/errors";
 import { getTheme, isThemeId, resolvedThemeId, THEME_IDS, THEMES } from "../src/theme/themes";
 import { avatarUrl, fetchJson, ApiError } from "../src/api/client";
 import { useCopyToClipboard } from "../src/composables/useCopyToClipboard";
@@ -24,6 +24,11 @@ describe("error helpers", () => {
     expect(errorMessage(new Error("boom"), "fallback")).toBe("boom");
     expect(errorMessage("boom", "fallback")).toBe("fallback");
     expect(errorMessage(null, "fallback")).toBe("fallback");
+  });
+
+  test("apiErrorMessage hides raw network errors but keeps server messages", () => {
+    expect(apiErrorMessage(new ApiError("Invalid credentials", 401), "Unable to sign in.")).toBe("Invalid credentials");
+    expect(apiErrorMessage(new Error("Failed to fetch"), "Unable to sign in.")).toBe("Unable to sign in.");
   });
 
   test("a cancelled passkey prompt gets the localised wording", () => {
@@ -107,6 +112,21 @@ describe("clipboard composable", () => {
       await Bun.sleep(40);
       expect(copied.value).toBe(false);
       expect(await copy("")).toBe(false);
+    } finally {
+      Object.defineProperty(globalThis.navigator, "clipboard", { configurable: true, value: original });
+    }
+  });
+
+  test("a denied clipboard does not report success", async () => {
+    const original = globalThis.navigator.clipboard;
+    Object.defineProperty(globalThis.navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: async () => { throw new Error("denied"); } },
+    });
+    try {
+      const { copied, copy } = useCopyToClipboard(20, false);
+      expect(await copy("secret")).toBe(false);
+      expect(copied.value).toBe(false);
     } finally {
       Object.defineProperty(globalThis.navigator, "clipboard", { configurable: true, value: original });
     }

@@ -34,10 +34,13 @@ function toRequest(req: IncomingMessage, url: URL): Request {
 /** The Node socket boundary: write Hono's response to the library's server response. */
 async function writeResponse(res: ServerResponse, response: Response): Promise<void> {
   const headers = new Headers(response.headers);
+  // Set-Cookie must be part of writeHead: appending after it throws
+  // ERR_HTTP_HEADERS_SENT and would corrupt the response.
   const cookies = headers.getSetCookie?.() ?? [];
   headers.delete("set-cookie");
-  res.writeHead(response.status, Object.fromEntries(headers.entries()));
-  for (const cookie of cookies) res.appendHeader("Set-Cookie", cookie);
+  const record: Record<string, string | string[]> = Object.fromEntries(headers.entries());
+  if (cookies.length > 0) record["set-cookie"] = cookies;
+  res.writeHead(response.status, record);
   if (response.body) res.end(Buffer.from(await response.arrayBuffer()));
   else res.end();
 }

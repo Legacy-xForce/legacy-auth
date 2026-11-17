@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createTestUser, loginOk, startApp, call } from "./helpers.ts";
+import { useStubFrontend } from "./oidc-helpers.ts";
 
 describe("Hono owns path and method dispatch for the OIDC registry", () => {
   test("malformed client ids, unknown subpaths, wrong verbs and the bare path are 404", async () => {
@@ -20,6 +21,22 @@ describe("Hono owns path and method dispatch for the OIDC registry", () => {
       }
     } finally {
       app.stop();
+    }
+  });
+
+  test("bare /interaction is the SPA, not an OP path; /interaction/:uid is proxied", async () => {
+    const restore = useStubFrontend();
+    const app = startApp();
+    try {
+      const bare = await call(app, "GET", "/interaction");
+      expect(bare.status).toBe(200);
+      expect(String(bare.body)).toContain("stub");
+
+      const withUid = await call(app, "GET", "/interaction/short");
+      expect(withUid.status).toBe(404);
+    } finally {
+      app.stop();
+      restore();
     }
   });
 

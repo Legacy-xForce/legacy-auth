@@ -1,3 +1,10 @@
+import { ApiError } from "../api/client";
+
+/** Only surface server messages; hide raw network/TypeError details from users. */
+export function apiErrorMessage(err: unknown, fallback: string): string {
+  return err instanceof ApiError ? err.message : fallback;
+}
+
 /** The message shown for an error, falling back when it is not an Error. */
 export function errorMessage(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message || fallback : fallback;
