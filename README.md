@@ -9,6 +9,8 @@ This is a monorepo (Bun workspaces):
 
 In production (see [Docker](#docker)), the backend serves the built frontend as static files on the same port, so the whole app is a single deployable image.
 
+Backend source is organized by concern: `backend/src/routes/` holds one module per domain, and each module registers its OpenAPI documentation together with its Hono handler (`registerXRoutes(app)`); `backend/src/middleware/` holds the auth guards; `backend/src/lib/` holds the shared client-IP, audit and OpenAPI helpers; and `backend/src/app.ts` is only the composition root and the `fetch` entry point.
+
 ## Features
 
 - An OpenID Provider (`/.well-known/openid-configuration`, `/authorize`, `/token`, `/userinfo`, `/logout`): Authorization Code + PKCE, a shared browser session across apps, and back-channel logout. See [OpenID Provider](#openid-provider).

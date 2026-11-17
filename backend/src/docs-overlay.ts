@@ -91,194 +91,6 @@ export const oidcPaths: Record<string, unknown> = {
   },
 };
 
-/** Documents operations whose runtime validation is intentionally left to the handler. */
-export const docsOnlyPaths: Record<string, unknown> = {
-  "/auth/passkey/login-options": {
-    post: {
-      tags: ["Passkey"],
-      summary: "Generate WebAuthn login options",
-      deprecated: true,
-      description: "Deprecated with `/auth/login`; passkeys are an authentication method at the OpenID Provider's sign-in page.",
-      requestBody: {
-        required: false,
-        content: { "application/json": { schema: { type: "object", properties: { username: { type: "string" } } } } },
-      },
-      responses: { "200": { description: "WebAuthn assertion options" } },
-    },
-  },
-  "/auth/passkey/login-verify": {
-    post: {
-      tags: ["Passkey"],
-      summary: "Verify WebAuthn assertion and issue tokens",
-      deprecated: true,
-      description: "Deprecated with `/auth/login`. Body is the WebAuthn assertion (`id`, `rawId`, `response`) plus an optional `audience`, as for `/auth/login`.",
-      requestBody: { required: true, content: { "application/json": { schema: { type: "object" } } } },
-      responses: {
-        "200": { description: "Tokens issued successfully", content: { "application/json": { schema: { $ref: "#/components/schemas/TokenResponse" } } } },
-        "400": { description: "Unknown audience" },
-        "401": { description: "Invalid passkey signature or replay detected" },
-        "403": { description: "Account disabled, or no access to the requested audience" },
-        "429": { description: "Too many failed attempts; see the Retry-After header" },
-      },
-    },
-  },
-  "/auth/passkey/register-options": {
-    post: {
-      tags: ["Passkey"],
-      summary: "Generate WebAuthn registration options",
-      security: [{ bearerAuth: [] }],
-      responses: { "200": { description: "WebAuthn creation options" }, "401": { description: "Unauthorized" } },
-    },
-  },
-  "/auth/passkey/register-verify": {
-    post: {
-      tags: ["Passkey"],
-      summary: "Verify WebAuthn registration and store passkey credential",
-      security: [{ bearerAuth: [] }],
-      requestBody: { required: true, content: { "application/json": { schema: { type: "object" } } } },
-      responses: {
-        "200": { description: "Credential registered successfully" },
-        "400": { description: "Invalid credential payload" },
-        "401": { description: "Unauthorized" },
-        "409": { description: "The credential id is registered to another account" },
-      },
-    },
-  },
-  "/auth/passkey/credentials": {
-    get: {
-      tags: ["Passkey"],
-      summary: "List registered passkeys for current user",
-      security: [{ bearerAuth: [] }],
-      responses: { "200": { description: "List of registered passkeys" }, "401": { description: "Unauthorized" } },
-    },
-  },
-  "/auth/passkey/credentials/{id}": {
-    delete: {
-      tags: ["Passkey"],
-      summary: "Delete a registered passkey",
-      security: [{ bearerAuth: [] }],
-      parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
-      responses: { "200": { description: "Passkey deleted" }, "401": { description: "Unauthorized" }, "404": { description: "Passkey not found" } },
-    },
-  },
-  "/auth/profile-picture": {
-    post: {
-      tags: ["Profile"],
-      summary: "Upload the authenticated user's profile picture",
-      description: "Accepts JPEG, PNG, WebP, AVIF, or GIF images. Every image is resized to 256x256 (cropped to fit) and re-encoded as WebP. Animated input stays animated; transparency is preserved.",
-      security: [{ bearerAuth: [] }],
-      requestBody: {
-        required: true,
-        content: { "multipart/form-data": { schema: { type: "object", required: ["file"], properties: { file: { type: "string", format: "binary" } } } } },
-      },
-      responses: {
-        "200": { description: "Profile picture stored successfully", content: { "application/json": { schema: { $ref: "#/components/schemas/UploadProfilePictureResponse" } } } },
-        "400": { description: "Missing file, unsupported format, or corrupted image" },
-        "401": { description: "Invalid access token" },
-        "403": { description: "Account disabled" },
-        "413": { description: "File exceeds maximum upload size" },
-      },
-    },
-  },
-  "/auth/profile-picture/{userId}": {
-    get: {
-      tags: ["Profile"],
-      summary: "Fetch a user's profile picture",
-      parameters: [{ name: "userId", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
-      responses: {
-        "200": {
-          description: "Profile picture image bytes (image/webp, or a legacy image/avif, image/jpeg, image/gif)",
-          headers: { ETag: { description: "Validator for the stored file; send it back in If-None-Match to revalidate", schema: { type: "string" } } },
-          content: {
-            "image/avif": { schema: { type: "string", format: "binary" } },
-            "image/webp": { schema: { type: "string", format: "binary" } },
-            "image/jpeg": { schema: { type: "string", format: "binary" } },
-            "image/gif": { schema: { type: "string", format: "binary" } },
-          },
-        },
-        "304": { description: "Not Modified — the If-None-Match header matched the current ETag" },
-        "400": { description: "Invalid user id" },
-        "404": { description: "No profile picture stored for this user" },
-      },
-    },
-  },
-  "/admin/oidc/clients": {
-    get: {
-      tags: ["Admin"],
-      summary: "List registered OpenID clients",
-      security: [{ bearerAuth: [] }],
-      responses: {
-        "200": { description: "Clients, never with secret material", content: { "application/json": { schema: { type: "object", properties: { items: { type: "array", items: { $ref: "#/components/schemas/OidcClient" } } } } } } },
-        "401": { description: "Missing or invalid access token" },
-        "403": { description: "Admin role required" },
-      },
-    },
-    post: {
-      tags: ["Admin"],
-      summary: "Register an OpenID client",
-      description: "A confidential client gets a secret, returned once in `client_secret`; only its hash is stored.",
-      security: [{ bearerAuth: [] }],
-      requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/CreateOidcClientRequest" } } } },
-      responses: {
-        "201": { description: "Created", content: { "application/json": { schema: { type: "object", properties: { client: { $ref: "#/components/schemas/OidcClient" }, client_secret: { type: "string" } } } } } },
-        "400": { description: "Invalid field (redirect URI rules, scopes, client_id, ...)" },
-        "401": { description: "Missing or invalid access token" },
-        "403": { description: "Admin role required" },
-        "409": { description: "client_id already exists" },
-      },
-    },
-  },
-  "/admin/oidc/clients/{clientId}": {
-    get: {
-      tags: ["Admin"],
-      summary: "Read one OpenID client",
-      security: [{ bearerAuth: [] }],
-      parameters: [{ name: "clientId", in: "path", required: true, schema: { type: "string" } }],
-      responses: { "200": { description: "The client", content: { "application/json": { schema: { $ref: "#/components/schemas/OidcClient" } } } }, "404": { description: "Unknown client" } },
-    },
-    patch: {
-      tags: ["Admin"],
-      summary: "Update an OpenID client",
-      description: "Any of `name`, `redirect_uris`, `post_logout_redirect_uris`, `backchannel_logout_uri`, `allowed_scopes`. `is_public` cannot change; other fields are refused.",
-      security: [{ bearerAuth: [] }],
-      parameters: [{ name: "clientId", in: "path", required: true, schema: { type: "string" } }],
-      requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/UpdateOidcClientRequest" } } } },
-      responses: { "200": { description: "The updated client" }, "400": { description: "Invalid or unknown field" }, "404": { description: "Unknown client" } },
-    },
-  },
-  "/admin/oidc/clients/{clientId}/rotate-secret": {
-    post: {
-      tags: ["Admin"],
-      summary: "Issue a new client secret",
-      description: "The new secret is returned once. The previous one keeps working for `grace_seconds` (default OIDC_SECRET_ROTATION_GRACE_SECONDS; 0 revokes it at once). Refresh tokens are unaffected.",
-      security: [{ bearerAuth: [] }],
-      parameters: [{ name: "clientId", in: "path", required: true, schema: { type: "string" } }],
-      requestBody: { required: false, content: { "application/json": { schema: { type: "object", properties: { grace_seconds: { type: "number", minimum: 0, maximum: 2592000 } } } } } },
-      responses: { "200": { description: "The client and its new `client_secret`" }, "400": { description: "A public client has no secret, or the grace period is out of range" }, "404": { description: "Unknown client" } },
-    },
-  },
-  "/admin/oidc/clients/{clientId}/disable": {
-    post: {
-      tags: ["Admin"],
-      summary: "Disable an OpenID client",
-      description: "A disabled client gets `invalid_client` from every endpoint, refreshes included.",
-      security: [{ bearerAuth: [] }],
-      parameters: [{ name: "clientId", in: "path", required: true, schema: { type: "string" } }],
-      responses: { "200": { description: "The client" }, "404": { description: "Unknown client" } },
-    },
-  },
-  "/admin/oidc/clients/{clientId}/enable": {
-    post: {
-      tags: ["Admin"],
-      summary: "Enable an OpenID client",
-      description: "A confidential client needs a secret first (see rotate-secret).",
-      security: [{ bearerAuth: [] }],
-      parameters: [{ name: "clientId", in: "path", required: true, schema: { type: "string" } }],
-      responses: { "200": { description: "The client" }, "404": { description: "Unknown client" }, "409": { description: "The client has no secret yet" } },
-    },
-  },
-};
-
 type Document = {
   paths: Record<string, Record<string, unknown>>;
   components?: { schemas?: Record<string, unknown>; securitySchemes?: Record<string, unknown> };
@@ -289,24 +101,18 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Shallow-merge per path + per method so generated operations are overridden cleanly. */
-function mergePaths(target: Record<string, Record<string, unknown>>, overlay: Record<string, unknown>) {
-  for (const [path, item] of Object.entries(overlay)) {
+/** Adds the proxy-only operations and the bearer scheme to a generated document. */
+export function applyDocOverlay(document: Document): Document {
+  for (const [path, item] of Object.entries(oidcPaths)) {
     if (!isObject(item)) continue;
-    const existing = isObject(target[path]) ? target[path] : {};
+    const existing = isObject(document.paths[path]) ? document.paths[path] : {};
     for (const [method, operation] of Object.entries(item)) {
       existing[method] = isObject(operation) && isObject(existing[method])
         ? { ...existing[method], ...operation }
         : operation;
     }
-    target[path] = existing;
+    document.paths[path] = existing;
   }
-}
-
-/** Adds the proxy-only operations and the documented-only request bodies to a generated document. */
-export function applyDocOverlay(document: Document): Document {
-  mergePaths(document.paths, oidcPaths);
-  mergePaths(document.paths, docsOnlyPaths);
 
   document.components ??= {};
   document.components.securitySchemes = {
