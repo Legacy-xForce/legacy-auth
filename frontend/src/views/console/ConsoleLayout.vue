@@ -25,7 +25,7 @@ async function logout() {
 <template>
   <div class="flex min-h-dvh flex-col">
     <header class="sticky top-0 z-30 border-b border-line bg-canvas/80 pt-[env(safe-area-inset-top)] backdrop-blur-xl">
-      <div class="mx-auto flex h-16 w-full max-w-6xl items-center gap-2 px-4 sm:gap-3 sm:px-6">
+      <div class="flex h-16 w-full items-center gap-2 px-4 sm:gap-3 sm:px-6">
         <RouterLink :to="{ name: auth.isAdmin ? 'users' : 'settings' }" class="mr-1 flex items-center gap-2.5 text-fg no-underline sm:mr-3">
           <BrandMark class="size-6" />
           <span class="display-text hidden text-title sm:inline">Legacy <span class="text-muted">Auth</span></span>
