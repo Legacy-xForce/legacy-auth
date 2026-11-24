@@ -4,6 +4,7 @@ import { jsonHeaders } from "../http.ts";
 import { audit } from "../lib/audit.ts";
 import { readJsonObjectFromRequest } from "../lib/json.ts";
 import type { AppEnv, Ctx } from "../lib/context.ts";
+import { CLIENT_ID_PATTERN } from "./client-id.ts";
 import {
   ClientExistsError,
   ClientValidationError,
@@ -18,7 +19,6 @@ import {
   type ClientFields,
 } from "./clients.ts";
 
-const CLIENT_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{1,62}$/;
 const MAX_ROTATION_GRACE_SECONDS = 30 * 86400;
 
 // Responses can carry a client secret, so none of them may be cached.
