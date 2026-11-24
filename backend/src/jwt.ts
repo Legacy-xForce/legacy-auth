@@ -104,7 +104,16 @@ export function signRefreshToken(payload: { sub: string; username: string; app?:
 }
 
 export function verifyAccessToken(token: string): AccessTokenPayload {
-  return jwt.verify(token, getPublicKey(), { algorithms: ["ES256"] }) as AccessTokenPayload;
+  const payload = jwt.verify(token, getPublicKey(), {
+    algorithms: ["ES256"],
+    issuer: config.jwtIssuer,
+  }) as AccessTokenPayload;
+  // The OP signs ID tokens with this same key. Without the type check an ID token
+  // (sub = user id) would authenticate against the legacy console endpoints.
+  if (payload.type !== "access") {
+    throw new Error("Invalid access token type");
+  }
+  return payload;
 }
 
 export function verifyRefreshToken(token: string): RefreshTokenPayload {
