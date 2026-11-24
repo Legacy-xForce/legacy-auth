@@ -45,3 +45,23 @@ export function cacheUser(user: CachedUser) {
 export function invalidateCachedUser(username: string) {
   cache.delete(normalizeUsername(username));
 }
+
+// Like the throttle and passkey stores, expired entries are swept on a timer:
+// a cache miss alone cannot reclaim usernames nobody ever looks up again.
+const SWEEP_INTERVAL_MS = 60_000;
+
+setInterval(() => {
+  pruneExpiredCache();
+}, SWEEP_INTERVAL_MS).unref();
+
+/** Drops entries whose TTL has passed; `now` lets tests simulate a later instant. */
+export function pruneExpiredCache(now = Date.now()): number {
+  let removed = 0;
+  for (const [key, entry] of cache.entries()) {
+    if (now > entry.expiresAt) {
+      cache.delete(key);
+      removed += 1;
+    }
+  }
+  return removed;
+}
