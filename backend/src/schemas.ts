@@ -1,5 +1,6 @@
 import { z } from "@hono/zod-openapi";
 import { config } from "./config.ts";
+import { CLIENT_ID_PATTERN } from "./oidc/client-id.ts";
 import { APP_AUDIENCES } from "./types.ts";
 
 /**
@@ -75,7 +76,7 @@ export const OidcClient = z.object({
 }).openapi("OidcClient");
 
 export const CreateOidcClientRequest = z.object({
-  client_id: z.string().regex(/^[a-z0-9][a-z0-9._-]{1,62}$/),
+  client_id: z.string().regex(CLIENT_ID_PATTERN),
   name: z.string(),
   is_public: z.boolean(),
   redirect_uris: z.array(z.string()).openapi({ description: "Matched exactly, except that a web URI also authorizes the same path and query on any subdomain of its host (for preview deployments). https, or http on localhost; a custom scheme only for a public client. No wildcards or fragments." }),

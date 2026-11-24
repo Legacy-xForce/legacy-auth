@@ -3,7 +3,7 @@ import { log } from "../logger.ts";
 import { startOidcBackend, type OidcBackend } from "./backend.ts";
 import type { AppAudience } from "../types.ts";
 import { endUserAppAccess, endUserSessions } from "./sessions.ts";
-import { createOidcProxyApp, isOidcPath } from "./proxy.ts";
+import { createOidcProxyApp } from "./proxy.ts";
 
 type State = { status: "stopped" } | { status: "running"; backend: OidcBackend } | { status: "failed"; error: unknown };
 
@@ -19,9 +19,6 @@ let state: State = { status: "stopped" };
  * console carry on, and the OP's own paths answer 404 or 503 instead.
  */
 export const oidc = {
-  /** Whether `pathname` belongs to the OP. */
-  handles: isOidcPath,
-
   get running() {
     return state.status === "running";
   },

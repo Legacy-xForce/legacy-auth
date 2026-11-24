@@ -233,7 +233,7 @@ async function refuseBeforeRotating(ctx: any): Promise<boolean> {
   if (!token) return true;
 
   const granted = asList(token.resource);
-  const primary = (ctx.oidc.client as LegacyClient).legacy_primary_resource;
+  const primary = (ctx.oidc.client as LegacyClient | undefined)?.legacy_primary_resource;
   const requested = asList(ctx.oidc?.params?.resource);
 
   // Naming nothing, or several, only works for a grant of one app or a client with a main app.

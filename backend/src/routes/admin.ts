@@ -239,12 +239,13 @@ async function handleUpdateUser(c: Ctx) {
       const passwordHash = await Bun.password.hash(String(body.password));
       const updated = await updateUserPasswordHash(id, passwordHash);
       if (updated) user = updated;
-      await revokeAllRefreshTokensForUser(id);
     }
   } catch (error) {
     return userWriteErrorResponse(c, error, "Failed to update user");
   }
-  if (!user.active) await revokeAllRefreshTokensForUser(id);
+  // One revocation covers both reasons; the old code did it twice when a password
+  // change also disabled the account.
+  if (!user.active || body.password) await revokeAllRefreshTokensForUser(id);
   if (!user.active || body.password) await oidc.endUserSessions(id);
   invalidateCachedUser(previousUsername);
   invalidateCachedUser(user.username);

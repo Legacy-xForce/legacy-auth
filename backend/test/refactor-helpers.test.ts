@@ -7,6 +7,8 @@ import { toPublicUser } from "../src/lib/public-user.ts";
 import { tokenResponse } from "../src/lib/tokens.ts";
 import { checkPasswordLogin } from "../src/oidc/credentials.ts";
 import { previousSecretValid } from "../src/oidc/clients.ts";
+import { CLIENT_ID_PATTERN } from "../src/oidc/client-id.ts";
+import { CreateOidcClientRequest } from "../src/schemas.ts";
 import { assertPublicTarget, internalTargetProblem } from "../src/oidc/net-safety.ts";
 import { issuerOrigin, issuerUrl } from "../src/oidc/origin.ts";
 import { APP_AUDIENCES, type UserRecord } from "../src/types.ts";
@@ -214,6 +216,17 @@ describe("single-round-trip pagination", () => {
     const beyond = await listAuthEvents({ event: "test.event", username: user.username, page: 1000, pageSize: 10 });
     expect(beyond.items).toEqual([]);
     expect(beyond.total).toBe(1);
+  });
+});
+
+describe("the shared client-id rule", () => {
+  test("storage, admin routing and the OpenAPI schema all use the same pattern", () => {
+    expect(CLIENT_ID_PATTERN.test("a")).toBe(false);
+    expect(CLIENT_ID_PATTERN.test("calendar-web")).toBe(true);
+    expect(CLIENT_ID_PATTERN.test("A")).toBe(false);
+    expect(CLIENT_ID_PATTERN.test("a".repeat(64))).toBe(false);
+    expect(CreateOidcClientRequest.shape.client_id.safeParse("calendar-web").success).toBe(true);
+    expect(CreateOidcClientRequest.shape.client_id.safeParse("A").success).toBe(false);
   });
 });
 

@@ -497,6 +497,20 @@ describe("the sign-in page and its JSON API", () => {
     return { client, browser, interaction, user: await user };
   }
 
+  test("an oversized JSON body is refused cleanly and the connection stays usable", async () => {
+    const { browser, interaction } = await start();
+    const oversized = await browser.request(`${ISSUER_ORIGIN}/interaction/${interaction.uid}/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: ISSUER_ORIGIN },
+      body: JSON.stringify({ username: "x".repeat(20_000), password: "p" }),
+    });
+    expect(oversized.status).toBe(400);
+    expect((await oversized.json()).error).toBe("A JSON object body is required");
+    // The same browser can still talk to this interaction afterwards.
+    const details = await browser.request(`${ISSUER_ORIGIN}/interaction/${interaction.uid}/details`);
+    expect(details.status).toBe(200);
+  });
+
   test("login CSRF: a cross-origin post is refused", async () => {
     const { browser, interaction, user } = await start();
     const result = await browser.interactionCall(interaction.uid, "login", { username: user.username, password: user.password }, { origin: "https://evil.example" });

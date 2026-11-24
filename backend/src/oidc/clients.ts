@@ -1,6 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "crypto";
 import { config } from "../config.ts";
 import { sql } from "../db.ts";
+import { CLIENT_ID_PATTERN } from "./client-id.ts";
 import { internalTargetProblem } from "./net-safety.ts";
 import { issuerOrigin } from "./origin.ts";
 import { ADMIN_SCOPE, resourceForAudience, resourcesForScopes, seedScopes, SUPPORTED_SCOPES } from "./scopes.ts";
@@ -58,7 +59,6 @@ export function secretMatchesHash(presented: string, storedHash: string | null |
 
 export class ClientValidationError extends Error {}
 
-const CLIENT_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{1,62}$/;
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 // Schemes that must never be a redirect target, whatever else the URI looks like.
 const FORBIDDEN_SCHEMES = new Set(["javascript:", "data:", "file:", "vbscript:", "about:", "blob:", "ws:", "wss:", "ftp:"]);
@@ -261,6 +261,15 @@ export async function listClients(): Promise<OidcClientRow[]> {
 export async function getClient(clientId: string): Promise<OidcClientRow | null> {
   const rows = await sql<OidcClientRow[]>`SELECT ${sql.unsafe(COLUMNS)} FROM oidc_clients WHERE client_id = ${clientId} LIMIT 1;`;
   return rows[0] ?? null;
+}
+
+/** One lookup for every client named in a set of sessions, instead of one per session. */
+export async function getClients(clientIds: string[]): Promise<OidcClientRow[]> {
+  if (clientIds.length === 0) return [];
+  return sql<OidcClientRow[]>`
+    SELECT ${sql.unsafe(COLUMNS)} FROM oidc_clients
+    WHERE client_id = ANY(${sql.array(clientIds, "TEXT")}::text[]);
+  `;
 }
 
 export class ClientExistsError extends Error {}

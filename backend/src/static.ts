@@ -6,6 +6,7 @@
  * having to hash the whole file on each request.
  */
 import type { Ctx } from "./lib/context.ts";
+import { headersToRecord } from "./lib/headers.ts";
 
 type File = ReturnType<typeof Bun.file>;
 
@@ -25,7 +26,7 @@ export async function serveStaticFile(c: Ctx, file: File, headers: HeadersInit =
   const etag = fileEtag(file);
   responseHeaders.set("ETag", etag);
 
-  const record = Object.fromEntries(responseHeaders.entries()) as Record<string, string>;
+  const record = headersToRecord(responseHeaders);
   if (matchesIfNoneMatch(c.req.header("if-none-match") ?? null, etag)) {
     return c.newResponse(null, 304, record);
   }
