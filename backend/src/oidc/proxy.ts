@@ -1,5 +1,6 @@
 import { Hono, type Context } from "hono";
 import { log } from "../logger.ts";
+import { headersToRecord } from "../lib/headers.ts";
 import { issuerUrl } from "./origin.ts";
 import { isPrivateAddress, recordFailure, retryAfterSeconds, throttleKeys } from "../throttle.ts";
 
@@ -73,21 +74,7 @@ function hardened(c: Context<ProxyEnv>, response: Response, cacheable: boolean):
     headers.set("cache-control", "no-store");
     headers.set("pragma", "no-cache");
   }
-  // Hono's Context helpers take a plain header record. Collect repeated headers
-  // as arrays (Set-Cookie, WWW-Authenticate, Link, ...) so none are lost the way
-  // Object.fromEntries(Headers) would lose all but the last value.
-  const record: Record<string, string | string[]> = {};
-  for (const [key, value] of headers.entries()) {
-    const existing = record[key];
-    if (key === "set-cookie") {
-      record[key] = headers.getSetCookie?.() ?? [value];
-    } else if (existing === undefined) {
-      record[key] = value;
-    } else {
-      record[key] = Array.isArray(existing) ? [...existing, value] : [existing, value];
-    }
-  }
-  return c.newResponse(response.body, response.status as any, record);
+  return c.newResponse(response.body, response.status as any, headersToRecord(headers));
 }
 
 function proxyHandler(route: ProxyRoute) {
