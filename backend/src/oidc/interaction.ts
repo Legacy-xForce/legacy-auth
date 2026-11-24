@@ -45,11 +45,18 @@ async function readJson(c: ICtx): Promise<Record<string, any> | null> {
   const stream = c.env.nodeReq;
   const chunks: Buffer[] = [];
   let size = 0;
+  let tooLarge = false;
   for await (const chunk of stream) {
     size += (chunk as Buffer).length;
-    if (size > MAX_BODY_BYTES) return null;
+    // Keep draining after the cap so the Node request is not left half-read,
+    // but stop retaining bytes once we know the body will be refused.
+    if (size > MAX_BODY_BYTES) {
+      tooLarge = true;
+      continue;
+    }
     chunks.push(chunk as Buffer);
   }
+  if (tooLarge) return null;
   try {
     const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8"));
     return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
