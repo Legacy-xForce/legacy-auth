@@ -35,18 +35,19 @@ function generateRandomChallenge(): string {
   return crypto.randomBytes(32).toString("base64url");
 }
 
-function decodeBase64(value: unknown, fieldName: string): Buffer {
+export function decodeBase64(value: unknown, fieldName: string): Buffer {
   if (typeof value !== "string" || value.length === 0) {
     throw new Error(`${fieldName} must be a non-empty base64 string`);
   }
 
   let normalized = value.replace(/-/g, "+").replace(/_/g, "/").replace(/\s/g, "");
-  normalized += "=".repeat((4 - (normalized.length % 4)) % 4);
-  try {
-    return Buffer.from(normalized, "base64");
-  } catch {
+  // Buffer.from(..., "base64") silently ignores invalid characters, so the old
+  // try/catch could never fire. Validate the alphabet explicitly instead.
+  if (normalized.length % 4 === 1 || !/^[A-Za-z0-9+/]*={0,2}$/.test(normalized)) {
     throw new Error(`Invalid ${fieldName}`);
   }
+  normalized += "=".repeat((4 - (normalized.length % 4)) % 4);
+  return Buffer.from(normalized, "base64");
 }
 
 export type PasskeyRegisterVerifyPayload = {
