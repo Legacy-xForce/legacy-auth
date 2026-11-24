@@ -385,6 +385,26 @@ describe("ending every session of an account", () => {
     void browser;
   }
 
+  test("two separate browser sessions are both revoked", async () => {
+    const user = await createTestUser({ scopes: both });
+    const first = await signedInApp(new Browser(app), user);
+    const second = await signedInApp(new Browser(app), user);
+    try {
+      const before = await testSql`SELECT id FROM oidc_sessions WHERE user_id = ${user.id} AND revoked_at IS NULL`;
+      expect(before.length).toBe(2);
+      await call(app, "PATCH", `/admin/users/${user.id}`, { token: await adminToken(), json: { active: false } });
+      await eventually(async () => {
+        const rows = await testSql`SELECT revoked_at FROM oidc_sessions WHERE user_id = ${user.id}`;
+        return rows.length === 2 && rows.every((row: any) => row.revoked_at !== null);
+      });
+      expect((await refreshRequest(app, first.client, first.signed.tokens.body.refresh_token)).status).toBe(400);
+      expect((await refreshRequest(app, second.client, second.signed.tokens.body.refresh_token)).status).toBe(400);
+    } finally {
+      first.stub.stop();
+      second.stub.stop();
+    }
+  });
+
   test("an admin disabling the account tells every app and ends its tokens", async () => {
     const user = await createTestUser({ scopes: both });
     const { browser, apps } = await twoApps(user);

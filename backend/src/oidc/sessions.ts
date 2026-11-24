@@ -4,7 +4,7 @@ import { config } from "../config.ts";
 import { sql } from "../db.ts";
 import { log } from "../logger.ts";
 import { enqueueBackchannelRetry } from "./backchannel.ts";
-import { getClient, requiredResources } from "./clients.ts";
+import { getClients, requiredResources } from "./clients.ts";
 import { RESOURCE_SERVERS } from "./scopes.ts";
 import type { AppAudience } from "../types.ts";
 
@@ -41,6 +41,18 @@ const hashId = (model: string, id: string) => createHash("sha256").update(`${mod
 
 type SessionRow = { id: string; payload: { authorizations?: Record<string, { sid?: string; grantId?: string }> } };
 
+/** Two bulk DELETEs instead of two per authorization, with identical filters. */
+async function deleteGrants(grantIds: string[]): Promise<void> {
+  if (grantIds.length === 0) return;
+  await sql`
+    DELETE FROM oidc_payloads WHERE grant_id = ANY(${sql.array(grantIds, "TEXT")}::text[]);
+  `;
+  await sql`
+    DELETE FROM oidc_payloads
+    WHERE model = 'Grant' AND id = ANY(${sql.array(grantIds.map((id) => hashId("Grant", id)), "TEXT")}::text[]);
+  `;
+}
+
 /**
  * Signs a user out of every browser session: each app they were signed in to is
  * told by back-channel logout (retried if it fails), their grants and tokens
@@ -56,6 +68,7 @@ export async function endUserSessions(provider: Provider, userId: string): Promi
     WHERE user_id = ${userId} AND revoked_at IS NULL AND expires_at > now();
   `;
 
+  const grantIds: string[] = [];
   for (const session of sessions) {
     for (const [clientId, authorization] of Object.entries(session.payload.authorizations ?? {})) {
       const client = (await (provider as any).Client.find(clientId)) as
@@ -68,12 +81,17 @@ export async function endUserSessions(provider: Provider, userId: string): Promi
           await enqueueBackchannelRetry(clientId, userId, authorization.sid, error);
         }
       }
-      if (authorization.grantId) {
-        await sql`DELETE FROM oidc_payloads WHERE grant_id = ${authorization.grantId};`;
-        await sql`DELETE FROM oidc_payloads WHERE model = 'Grant' AND id = ${hashId("Grant", authorization.grantId)};`;
-      }
+      if (authorization.grantId) grantIds.push(authorization.grantId);
     }
-    await sql`UPDATE oidc_sessions SET revoked_at = now() WHERE id = ${session.id} AND revoked_at IS NULL;`;
+  }
+
+  await deleteGrants(grantIds);
+  if (sessions.length > 0) {
+    await sql`
+      UPDATE oidc_sessions SET revoked_at = now()
+      WHERE id = ANY(${sql.array(sessions.map((session) => session.id), "TEXT")}::text[])
+        AND revoked_at IS NULL;
+    `;
   }
 
   // Anything the sessions did not lead to (a grant whose session already expired).
@@ -99,10 +117,13 @@ export async function endUserAppAccess(provider: Provider, userId: string, audie
     SELECT id, payload FROM oidc_sessions
     WHERE user_id = ${userId} AND revoked_at IS NULL AND expires_at > now();
   `;
-  let ended = 0;
+  const clientIds = [...new Set(sessions.flatMap((session) => Object.keys(session.payload.authorizations ?? {})))];
+  const clients = new Map((await getClients(clientIds)).map((row) => [row.client_id, row]));
+
+  const grantIds: string[] = [];
   for (const session of sessions) {
     for (const [clientId, authorization] of Object.entries(session.payload.authorizations ?? {})) {
-      const row = await getClient(clientId);
+      const row = clients.get(clientId);
       if (!row || !requiredResources(row).includes(indicator)) continue;
       const client = (await (provider as any).Client.find(clientId)) as
         | { backchannelLogoutUri?: string; backchannelLogout(sub: string, sid: string): Promise<void> }
@@ -114,14 +135,11 @@ export async function endUserAppAccess(provider: Provider, userId: string, audie
           await enqueueBackchannelRetry(clientId, userId, authorization.sid, error);
         }
       }
-      if (authorization.grantId) {
-        await sql`DELETE FROM oidc_payloads WHERE grant_id = ${authorization.grantId};`;
-        await sql`DELETE FROM oidc_payloads WHERE model = 'Grant' AND id = ${hashId("Grant", authorization.grantId)};`;
-        ended += 1;
-      }
+      if (authorization.grantId) grantIds.push(authorization.grantId);
     }
   }
-  return ended;
+  await deleteGrants(grantIds);
+  return grantIds.length;
 }
 
 /** Removes expired and long-revoked rows; the library never deletes them itself. */

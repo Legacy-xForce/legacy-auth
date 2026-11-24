@@ -263,6 +263,15 @@ export async function getClient(clientId: string): Promise<OidcClientRow | null>
   return rows[0] ?? null;
 }
 
+/** One lookup for every client named in a set of sessions, instead of one per session. */
+export async function getClients(clientIds: string[]): Promise<OidcClientRow[]> {
+  if (clientIds.length === 0) return [];
+  return sql<OidcClientRow[]>`
+    SELECT ${sql.unsafe(COLUMNS)} FROM oidc_clients
+    WHERE client_id = ANY(${sql.array(clientIds, "TEXT")}::text[]);
+  `;
+}
+
 export class ClientExistsError extends Error {}
 
 /** Creates a client. A confidential client gets a secret, returned once and stored only as a hash. */
